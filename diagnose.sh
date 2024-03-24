@@ -6,7 +6,7 @@ CONTAINER_NAME="unchained_worker"
 echo "##########################################################################"
 echo "# Unchained Ironsmith                                                    #"
 echo "# A community-made tool to help diagnose and fix unchained node problem. #"
-echo "# v1 Supports only docker nodes and tested only on ubuntu                #"
+echo "# v1.1 Supports only docker nodes and tested only on ubuntu              #"
 echo "##########################################################################"
 
 #Declaring functions here
@@ -30,14 +30,14 @@ cecho() {
 # A function to check if container is running
 isRunning() {
     container_state=$(sudo docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME")
-    echo $container_state
+    echo "$container_state"
 }
 
 # A function to check if container is restarting
 isRestarting() {
     sleep 3
     container_state=$(sudo docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME")
-    echo $container_state
+    echo "$container_state"
 }
 
 get_logs_path() {
@@ -76,7 +76,7 @@ pull_and_recreate() {
     remove_container_response=$({ sudo docker rm --force unchained_worker;} 2>&1)
     cecho "Starting up the node..." "yellow"
     starting_response=$({ sudo ./unchained.sh up -d --force-recreate; } 2>&1)
-    echo "update response: $update_response\nremove container response:$remove_container_response\nrecreate response: $starting_response" 
+    echo "update response: $update_response || remove container response:$remove_container_response || recreate response: $starting_response" 
 }
 #getting image id based on the tag provided in arg
 get_imageID() {
@@ -93,7 +93,7 @@ safe_update() {
         response=$(pull_and_recreate)
         sleep 2
         update_state=$(is_uptodate)
-        if [ "$update_state" == "true"] 
+        if [ "$update_state" == "true" ] 
         then
             cecho "Node was updated successfully with a regular pull" "green"
             return 1
@@ -111,9 +111,9 @@ safe_update() {
         sudo docker rmi --force ghcr.io/kenshitech/unchained:latest 1> /dev/null
         cecho "Pulling latest stable image..." "yellow"
         latest_stable=$(get_latest_version)
-        sudo docker pull ghcr.io/kenshitech/unchained:v$latest_stable >/dev/null
+        sudo docker pull ghcr.io/kenshitech/unchained:v"$latest_stable" >/dev/null
         cecho "Tagging image as latest..." "yellow"
-        sudo docker tag ghcr.io/kenshitech/unchained:v$latest_stable ghcr.io/kenshitech/unchained:latest >/dev/null
+        sudo docker tag ghcr.io/kenshitech/unchained:v"$latest_stable" ghcr.io/kenshitech/unchained:latest >/dev/null
         cecho "Removing container..." "yellow"
         sudo docker rm --force unchained_worker >/dev/null
         cecho "Starting up a node with stable release image..." "yellow"
@@ -152,8 +152,8 @@ if ! sudo docker ps -a &>/dev/null
 then
     cecho "Docker service is not running" "red"
     cecho "Attempting to start docker service" "yellow"
-    x=$( { sudo snap start docker ; } 2>&1)
-    x=$( { sudo systemctl start docker ; } 2>&1)
+    { sudo snap start docker ; } 2>&1
+    { sudo systemctl start docker ; } 2>&1
     sleep 3
     if ! sudo docker ps -a > /dev/null 2>&1
     then
@@ -174,7 +174,7 @@ if ! sudo docker inspect "$CONTAINER_NAME" &> /dev/null; then
     cecho "Attempting to locate unchained folder" "yellow"
     
     #navigating to home directory
-    cd ~
+    cd ~ || { echo "Error: Failed to change directory to the home directory."; exit 1; }
     
     # Store search results in an array
     files=($(sudo find  . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type f -name "unchained.sh" -printf "%h\n" \;))
@@ -192,7 +192,7 @@ if ! sudo docker inspect "$CONTAINER_NAME" &> /dev/null; then
     select option in "${files[@]}"; do
         if [ -n "$option" ]; then
             cecho "Navigating to directory: $option" "yellow"
-            cd "$option"
+            cd "$option" ||  { echo "Error: Failed to change directory to $option."; exit 1; }
             cecho "Starting the node..." "yellow"
             sudo ./unchained.sh worker up -d > /dev/null 2>&1
             # Add your command to open the selected file here (e.g., open "$option")
@@ -210,7 +210,7 @@ docker_inspect=$(sudo docker inspect --format='{{json .Config.Labels}}' "$CONTAI
 folder=$(echo "$docker_inspect" | grep -o '"com.docker.compose.project.working_dir":"[^"]*' | awk -F ':"' '{print $2}')
 
 # Change directory to the folder where the Docker container was created
-cd "$folder" || exit 1
+cd "$folder" ||  { echo "Error: Failed to change directory to $folder."; exit 1; }
 cecho "Working directory detected $(pwd)" "green"
 
 
@@ -269,9 +269,9 @@ do
         1)
             cecho "Fixing the error attempt $fix_node_escalation: updating conf file." "yellow"
             node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
-            if [ $node_name == '<name>' ]
+            if [ "$node_name" == '<name>' ]
             then
-                read -p "Please, enter your perfered node name: " node_name
+                read -r -p "Please, enter your perfered node name: " node_name
             fi
             cecho "Setting your node name to $node_name"
             wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
