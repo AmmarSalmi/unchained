@@ -177,7 +177,8 @@ if ! sudo docker inspect "$CONTAINER_NAME" &> /dev/null; then
     cd ~ || { echo "Error: Failed to change directory to the home directory."; exit 1; }
     
     # Store search results in an array
-    files=($(sudo find  . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type f -name "unchained.sh" -printf "%h\n" \;))
+    #files=($(sudo find  . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type f -name "unchained.sh" -printf "%h\n" \;))
+    mapfile -t files < <(sudo find . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type f -name "unchained.sh" -printf "%h\n" \;)
 
     # Check if any files were found
     if [ ${#files[@]} -eq 0 ]; then
