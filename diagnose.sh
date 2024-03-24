@@ -152,8 +152,8 @@ if ! sudo docker ps -a &>/dev/null
 then
     cecho "Docker service is not running" "red"
     cecho "Attempting to start docker service" "yellow"
-    { sudo snap start docker ; } 2>&1
-    { sudo systemctl start docker ; } 2>&1
+    sudo snap start docker > /dev/null 2>&1
+    sudo systemctl start docker > /dev/null 2>&1
     sleep 3
     if ! sudo docker ps -a > /dev/null 2>&1
     then
