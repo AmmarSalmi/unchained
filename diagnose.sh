@@ -376,6 +376,7 @@ do
                     echo "Generic name detected: $node_name."
                     read -r -p "Please, enter your perfered node name or press ENTER to keep the same name: "
             fi
+            #Increasing timeout if name changed since detecting points take longer if name is changed
             [ -z "$REPLY" ] && new_node_name="$node_name" || { new_node_name="$REPLY"; POINTS_TIMEOUT=60; }
             echo "Setting your node name to $new_node_name"
             #make sure wget is on the system
