@@ -1,7 +1,7 @@
 #!/bin/bash
-
+#Constants
 CONTAINER_NAME="unchained_worker"
-uname -a | grep
+POINTS_TIMEOUT=15
 
 #Welcome message and explanation
 echo "#################################################################################"
@@ -28,6 +28,8 @@ cecho() {
         ;;
     esac
 }
+
+#TO-DO merge both isRunning and isRestarting in one check_state function
 # A function to check if container is running
 isRunning() {
     container_state=$(sudo docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME")
@@ -41,11 +43,15 @@ isRestarting() {
     echo "$container_state"
 }
 
+#Get the file path for the logs of the node
+#Better source to catch useful information
+#Using ./unchained.sh worker logs -f is dynamic and could be troublesome
 get_logs_path() {
     container_logs=$(sudo docker inspect --format='{{.LogPath}}' "$CONTAINER_NAME")
     echo "$container_logs"
 }
 
+#Check the node logs for the currently used unchained version
 get_current_version()  {
     #check current version
     logs_path=$(get_logs_path)
@@ -53,23 +59,28 @@ get_current_version()  {
     echo "$version"
 }
 
+#Get the latest stable release from release page on github
+#TO-DO It's hard-coded and might need more finess to able to adapt in possible pages in the web page
 get_latest_version() {
     latest_version=$(curl -s "https://github.com/KenshiTech/unchained/releases" | grep 'releases/tag/v' | grep -iEv 'alpha|beta|rc'| head -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
     echo "$latest_version"
 }
 
+#Compare the current version of the node to the latest stable release
 is_uptodate() {
 current_version="$(get_current_version)"
 latest_version="$(get_latest_version)"
 [ "$latest_version" == "$current_version" ] && echo "true" || echo "false"
 }
 
+#Check the release page if the most recent push is stable or alpha, beta, rc
 is_latest_stable() {
     releases_url="https://github.com/KenshiTech/unchained/releases"
     release=$(curl -s $releases_url | grep 'releases/tag/v' | head -n 1 | grep -iE 'alpha|beta|rc')
     [ -z "$release" ] && echo 'true' || echo 'false'
 }
 
+#Simple pull and "up -d" sequence
 pull_and_recreate() {
     cecho "Pulling latest image..." "yellow"
     update_response=$({ sudo ./unchained.sh worker pull; } 2>&1)
@@ -78,11 +89,6 @@ pull_and_recreate() {
     cecho "Starting up the node..." "yellow"
     starting_response=$({ sudo ./unchained.sh up -d --force-recreate; } 2>&1)
     echo "update response: $update_response || remove container response:$remove_container_response || recreate response: $starting_response" 
-}
-#getting image id based on the tag provided in arg
-get_imageID() {
-    image_id=$(docker image ls --filter "reference=ghcr.io/kenshitech/unchained:$1")
-    echo "$image_id"
 }
 
 #Trying to update the node without catching an alph/beta/rc release by mistake
@@ -137,20 +143,18 @@ safe_update() {
 
 #Get the current node public key
 get_publickey() {
-echo "$(sudo cat conf/secrets.worker.yaml | grep public | awk -F ': ' '{print $2}')"
+sudo cat conf/secrets.worker.yaml | grep public | awk -F ': ' '{print $2}'
 }
 
+#Use API to fetch the node points on the scoreboard
 get_points() {
-    command -v base58 &>/dev/null || { echo "Installign base58..."; sudo apt-get install base58 -y &>/dev/null; }
-    command -v jq &>/dev/null || { echo "Installign jq..."; sudo apt-get install jq -y &>/dev/null; }
+    command -v base58 &>/dev/null || { sudo "$PKG_MNGR" install base58 -y &>/dev/null; }
+    command -v jq &>/dev/null || { sudo "$PKG_MNGR" install jq -y &>/dev/null; }
 
-    base58_key=$1
+    base58_key="$1"
 
     # Decode Base58 string to binary using base58 command
     base58_decoded=$(echo "$base58_key" | base58 -d)
-
-    # Trim leading zeros from the binary string
-    hex_trimmed=$(echo "$base58_decoded" | sed 's/^00*//')
 
     # Convert trimmed binary string to hexadecimal using xxd command
     hex_key=$(echo -n "$base58_decoded" | xxd -p | tr -d '\n')
@@ -164,13 +168,73 @@ get_points() {
     -d "$query" \
     https://shinobi.brokers.kenshi.io/gql/query)
 
-    # Extract the name and points from the JSON data using jq
-    #name=$(echo "$json_data" | jq -r '.data.signers.edges[0].node.name')
+    # Extract the points from the JSON data using jq
     points=$(echo "$json_data" | jq -r '.data.signers.edges[0].node.points')
 
     # Print the extracted values
     echo "$points"
 }
+monitor_score()  {
+    publicKey="${1:-"$pubkey"}"
+    local timeout=${2:-$POINTS_TIMEOUT}
+    current_score="$(get_points "$publicKey")";
+    points_0=$((current_score));
+    updated_points="$current_score";
+    points_1=$((updated_points));
+    #echo -n "Monitoring score to detect change. Please wait.";
+    waiting_time=0;
+    TIME_INCREMENT=3;
+    while (( points_1 == points_0 )) && (( waiting_time < timeout ));
+    do
+        sleep "$TIME_INCREMENT";
+        updated_points="$(get_points "$publicKey")";
+        points_1=$((updated_points));
+        ((waiting_time += $((TIME_INCREMENT)) ));
+        #echo -n ".";
+    done
+    #cecho " done" "green";
+    gained_points=$((points_1 - points_0));
+    echo "$gained_points"
+    }
+
+#Just a function to make sure that all nodes are not getting points for some global error
+is_broker_down() {
+    public_keys=(
+    #ammarubuntu node
+    "qTs5AQ1985W3scp3rNDdu97YhUt6sLVN3uyxD9GU4siQj3MwmVBX9DLW9hqgwXR5AYGpSen9juvbcZUUkoUjMh8YY17wd5nBa45u7YP3d57AiqXWuVf1hw6FSrFxjuk17zW"
+    #ammardebian node
+    "tj2PBQ32LKNMqWq9nWBJiGP1cmU2r5njasF4bzS3vW79NpCBUV9SVpDd2DGr6gxoyWQVjkLFeuL8RHqrDP2sk7fCV6RGPir9g8dvTrNbWcu8puZN3FnXPAeX15tbwGASW3u"
+    #jay's node
+    "mR95NEFnVPuiNXRoBfmRHipTAJGWdz2q34KfwjHVp6ngn98P9DbrZUsA11WPQ6eMiRdUav8gSDYJRiGLBbE5ShnPzrVKnbjyULfY3ZAUTPSZSfQoLzRNocrgjnEGXitRpE8"
+    )
+    tested_nodes=0
+    for key in "${public_keys[@]}"
+    do
+        [[ $(($(monitor_score "$key"))) -gt 0 ]] && break
+        ((tested_nodes++))
+    done
+    [ "$tested_nodes" -eq "${#public_keys[@]}" ]
+}
+
+#Detect linux dist and set the appropriate package manager
+#Some commands like wget, jq, base58 may not be installed by default on some machines
+#They are needed for this script to run properly
+if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
+            PKG_MNGR="apt"
+        elif [ "$ID" = "centos" ]; then
+            PKG_MNGR="yum"
+        else
+            echo "Unsupported Linux distribution."
+            exit 1
+        fi
+else
+        echo "Could not determine Linux distribution."
+        exit 1
+fi
+
+echo "$ID linux distro detected. Package manager set to $PKG_MNGR." 
 
 #Checking if docker version 2 is installed
 if ! command -v docker &>/dev/null; then
@@ -215,14 +279,11 @@ if ! sudo docker inspect "$CONTAINER_NAME" &> /dev/null; then
     cd ~ || { echo "Error: Failed to change directory to the home directory."; exit 1; }
     
     # Store search results in an array
-    #files=($(sudo find  . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type f -name "unchained.sh" -printf "%h\n" \;))
     mapfile -t files < <(sudo find . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type f -name "unchained.sh" -printf "%h\n" \;)
 
     # Check if any files were found
     if [ ${#files[@]} -eq 0 ]; then
         cecho "Error: No unchained directory was found on home directory" "red"
-        #curl -s "https://github.com/KenshiTech/unchained/releases" | grep 'releases/tag/v' | grep -o '<a [^>]*href="[^"]*"'| grep -Ev 'alpha|rc' | awk -F '"' '{print $2}'| sed 's#/KenshiTech/unchained/releases/tag/\(v[0-9]\+\.[0-9]\+\.[0-9]\+\)#https://github.com/KenshiTech/unchained/releases/download/\1/unchained-\1-docker.zip#'
-        #sudo docker tag f9716ec5fb27 ghcr.io/kenshitech/unchained:latest
         exit 1
     fi
 
@@ -307,12 +368,15 @@ do
     case $fix_node_escalation in
         1)
             cecho "Fixing the error attempt $fix_node_escalation: updating conf file." "yellow"
+            #TO-DO detecting generic node names with regex
             node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
             if [ "$node_name" == '<name>' ]
             then
                 read -r -p "Please, enter your perfered node name: " node_name
             fi
             cecho "Setting your node name to $node_name"
+            #make sure wget is on the system
+            ! command -v wget &>/dev/null && sudo "$PKG_MNGR" install wget -y &>/dev/null
             wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
             sed -i "s/<name>/$node_name/g" conf.yaml
             sudo mv conf.yaml conf/conf.worker.yaml
@@ -336,28 +400,39 @@ do
 done
 node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
 unchained_address=$(sudo cat conf/secrets.worker.yaml | grep address | head -n 1 | awk -F ': ' '{print $2}')
-cecho "Node has been repaired."
-# Define ANSI color escape codes
-GREEN='\033[0;32m'  # Green color
-NC='\033[0m'        # No color (reset)
-# Print with colored variables
-cecho "Checking if the node is gaining score on the leadboard." "yellow"
-current_score="$(get_points "$(get_publickey)")"
-echo -e "Your node name is ${GREEN}${node_name}${NC}" 
-echo -e "Your address is ${GREEN}${unchained_address}${NC}"
-echo -e "Your current score on the leadboard is ${GREEN}${current_score}${NC}"
-points_0=$((current_score))
-cecho "Monitoring your score to detect change. Please wait..." "yellow"
-updated_points="$current_score"
-points_1=$((updated_points))
-waiting_time=0
-while (( points_1 == points_0 )) && (( waiting_time < 60 ))
-do
-    sleep 3
-    updated_points="$(get_points "$(get_publickey)")"
-    points_1=$((updated_points))
-    ((waiting_time += 3))
-done
-gained_points=$((points_1 - points_0))
-(( gained_points > 0 )) && cecho "Your node gained $gained_points point in $waiting_time seconds." "green" || cecho "Your node didn't gain any points for $waiting_time seconds." "red"
-echo "For further help please visit us at https://t.me/KenshiTech. Find us in Unchained channel."
+cecho "Node has been repaired." "green"
+if [ "$ID" == "centos" ] 
+    then
+        echo "Sorry, score checking function is not currently available for CentOs operating systems."
+        echo "Please check your score manually on https://kenshi.io/unchained to confirm your node is"
+        echo "set up properly."
+        exit 1;
+    else
+        pubkey="$(get_publickey)"
+        current_score="$(get_points "$pubkey" )"
+        echo -n "Your node name is "
+        cecho "${node_name}." "green"
+        echo -n "Your address is "
+        cecho "${unchained_address}." "green"
+        echo -n "Your current score on the leadboard is "
+        cecho "${current_score}." "green"
+        echo "If your score should be higher then this."
+        echo "Make sure you're using the right secret key in your secrets.worker.yaml file"
+        echo "which resides in conf folder."
+        cecho "Let's make sure your node is gaining points. Please wait..." "yellow"
+        gained_points=$(("$(monitor_score)"))
+        if [[ gained_points -ne 0 ]] 
+        then
+        cecho "Your node is currently gaining points." "green" 
+        else
+            cecho "Your node didn't gain any points for $POINTS_TIMEOUT seconds." "red";
+            cecho "Checking if the problem is with the brokers not with your node..." "yellow"
+            if  is_broker_down 
+            then
+                cecho  "Brokers are possibly down.The problem is not on your part." "green" 
+            else
+                cecho "Other nodes are gaining points. The problem is on your part." "red" 
+            fi
+    fi
+fi
+echo "For further help, please visit us at https://t.me/KenshiTech. Find us in Unchained channel."
