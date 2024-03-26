@@ -1,13 +1,15 @@
 #!/bin/bash
 #Constants
+#the docker image name for unchained worker
 CONTAINER_NAME="unchained_worker"
+#default value for timeout when monitoring points increase on leadboard
 POINTS_TIMEOUT=15
 
 #Welcome message and explanation
 echo "#################################################################################"
 echo "# Unchained Ironsmith                                                           #"
 echo "# A community-made tool to help diagnose and fix unchained node problem.        #"
-echo "# v1.1 Supports only docker nodes and tested only on ubuntu, debian, and centos #"
+echo "# v1.2 Supports only docker nodes and tested only on ubuntu, debian, and centos #"
 echo "#################################################################################"
 
 #Declaring functions here
@@ -210,7 +212,7 @@ is_broker_down() {
     tested_nodes=0
     for key in "${public_keys[@]}"
     do
-        [[ $(($(monitor_score "$key"))) -gt 0 ]] && break
+        [[ $(($(monitor_score "$key" 15))) -gt 0 ]] && break
         ((tested_nodes++))
     done
     [ "$tested_nodes" -eq "${#public_keys[@]}" ]
@@ -314,7 +316,6 @@ cd "$folder" ||  { echo "Error: Failed to change directory to $folder."; exit 1;
 cecho "Working directory detected $(pwd)" "green"
 
 
-
 cecho "Checking if the node is running..." "yellow"
 node_state=$(isRunning)
 start_node_escalation=1
@@ -370,15 +371,17 @@ do
             cecho "Fixing the error attempt $fix_node_escalation: updating conf file." "yellow"
             #TO-DO detecting generic node names with regex
             node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
-            if [ "$node_name" == '<name>' ]
+            if [ "$node_name" == '<name>' ] || [[ "$node_name" =~ [a-zA-Z]+-[a-zA-Z]+-[a-zA-Z]+ ]]
             then
-                read -r -p "Please, enter your perfered node name: " node_name
+                    echo "Generic name detected: $node_name."
+                    read -r -p "Please, enter your perfered node name or press ENTER to keep the same name: "
             fi
-            cecho "Setting your node name to $node_name"
+            [ -z "$REPLY" ] && new_node_name="$node_name" || { new_node_name="$REPLY"; POINTS_TIMEOUT=60; }
+            echo "Setting your node name to $new_node_name"
             #make sure wget is on the system
             ! command -v wget &>/dev/null && sudo "$PKG_MNGR" install wget -y &>/dev/null
             wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
-            sed -i "s/<name>/$node_name/g" conf.yaml
+            sed -i "s/<name>/$new_node_name/g" conf.yaml
             sudo mv conf.yaml conf/conf.worker.yaml
             sudo ./unchained.sh worker restart 2>/dev/null
             ((fix_node_escalation++))
