@@ -1,13 +1,14 @@
 #!/bin/bash
 
 CONTAINER_NAME="unchained_worker"
+uname -a | grep
 
 #Welcome message and explanation
-echo "##########################################################################"
-echo "# Unchained Ironsmith                                                    #"
-echo "# A community-made tool to help diagnose and fix unchained node problem. #"
-echo "# v1.1 Supports only docker nodes and tested only on ubuntu              #"
-echo "##########################################################################"
+echo "#################################################################################"
+echo "# Unchained Ironsmith                                                           #"
+echo "# A community-made tool to help diagnose and fix unchained node problem.        #"
+echo "# v1.1 Supports only docker nodes and tested only on ubuntu, debian, and centos #"
+echo "#################################################################################"
 
 #Declaring functions here
 #Colored output function
@@ -132,6 +133,43 @@ safe_update() {
         fi
     fi
 
+}
+
+#Get the current node public key
+get_publickey() {
+echo "$(sudo cat conf/secrets.worker.yaml | grep public | awk -F ': ' '{print $2}')"
+}
+
+get_points() {
+    command -v base58 &>/dev/null || { echo "Installign base58..."; sudo apt-get install base58 -y &>/dev/null; }
+    command -v jq &>/dev/null || { echo "Installign jq..."; sudo apt-get install jq -y &>/dev/null; }
+
+    base58_key=$1
+
+    # Decode Base58 string to binary using base58 command
+    base58_decoded=$(echo "$base58_key" | base58 -d)
+
+    # Trim leading zeros from the binary string
+    hex_trimmed=$(echo "$base58_decoded" | sed 's/^00*//')
+
+    # Convert trimmed binary string to hexadecimal using xxd command
+    hex_key=$(echo -n "$base58_decoded" | xxd -p | tr -d '\n')
+
+    # Construct the GraphQL query with the hex key variable
+    query="{ \"query\": \"query Signers { signers (where: {key: \\\"$hex_key\\\"}) { edges { node { name points } } } }\" }"
+
+    # Make the curl POST request with the constructed JSON data
+    json_data=$(curl -sX POST \
+    -H "Content-Type: application/json" \
+    -d "$query" \
+    https://shinobi.brokers.kenshi.io/gql/query)
+
+    # Extract the name and points from the JSON data using jq
+    #name=$(echo "$json_data" | jq -r '.data.signers.edges[0].node.name')
+    points=$(echo "$json_data" | jq -r '.data.signers.edges[0].node.points')
+
+    # Print the extracted values
+    echo "$points"
 }
 
 #Checking if docker version 2 is installed
@@ -299,6 +337,27 @@ done
 node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
 unchained_address=$(sudo cat conf/secrets.worker.yaml | grep address | head -n 1 | awk -F ': ' '{print $2}')
 cecho "Node has been repaired."
-echo "Please check if your score is increasing on the leadboard. Visit https://kenshi.io/unchained."
-echo "Your node name is $node_name and your address is $unchained_address"
+# Define ANSI color escape codes
+GREEN='\033[0;32m'  # Green color
+NC='\033[0m'        # No color (reset)
+# Print with colored variables
+cecho "Checking if the node is gaining score on the leadboard." "yellow"
+current_score="$(get_points "$(get_publickey)")"
+echo -e "Your node name is ${GREEN}${node_name}${NC}" 
+echo -e "Your address is ${GREEN}${unchained_address}${NC}"
+echo -e "Your current score on the leadboard is ${GREEN}${current_score}${NC}"
+points_0=$((current_score))
+cecho "Monitoring your score to detect change. Please wait..." "yellow"
+updated_points="$current_score"
+points_1=$((updated_points))
+waiting_time=0
+while (( points_1 == points_0 )) && (( waiting_time < 60 ))
+do
+    sleep 3
+    updated_points="$(get_points "$(get_publickey)")"
+    points_1=$((updated_points))
+    ((waiting_time += 3))
+done
+gained_points=$((points_1 - points_0))
+(( gained_points > 0 )) && cecho "Your node gained $gained_points point in $waiting_time seconds." "green" || cecho "Your node didn't gain any points for $waiting_time seconds." "red"
 echo "For further help please visit us at https://t.me/KenshiTech. Find us in Unchained channel."
