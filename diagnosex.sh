@@ -313,7 +313,7 @@ then
         read -r -p "Please, enter your perfered node name or press ENTER to keep the same name: " nodenameanswer
 fi
 #Increasing timeout if name changed since detecting points take longer if name is changed
-[ -z "$nodenameanswer" ] && new_node_name="$node_name" || { new_node_name="$REPLY"; POINTS_TIMEOUT=60; }
+[ -z "$nodenameanswer" ] && new_node_name="$node_name" || { new_node_name="$nodenameanswer"; POINTS_TIMEOUT=60; }
 echo "Setting your node name to $new_node_name"
 #make sure wget is on the system
 ! command -v wget &>/dev/null && sudo "$PKG_MNGR" install wget -y &>/dev/null
