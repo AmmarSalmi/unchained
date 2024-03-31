@@ -215,22 +215,27 @@ is_broker_down() {
 #Detect linux dist and set the appropriate package manager
 #Some commands like wget, jq may not be installed by default on some machines
 #They are needed for this script to run properly
-if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
-            PKG_MNGR="apt"
-        elif [ "$ID" = "centos" ]; then
-            PKG_MNGR="yum"
-        else
-            echo "Unsupported Linux distribution."
-            exit 1
-        fi
+if command -v apt &>/dev/null; then
+    PKG_MNGR="apt"
+elif command -v yum &>/dev/null; then
+    PKG_MNGR="apt"
+elif command -v dnf &>/dev/null; then
+    PKG_MNGR="apt"
+elif command -v pacman &>/dev/null; then
+    PKG_MNGR="apt"
 else
-        echo "Could not determine Linux distribution."
+    echo "Unknown package manager"
+    read -p -r "Please type your package manager: " pm_answer
+    if [ ! -z "$pm_answer" ] && command -v "pm_answer" &>/dev/null; then
+        PKG_MNGR="$pm_answer"
+        cecho "WARNING: IronSmith wasn't tested with this package manager." "yellow"
+    else
+        echo "The package manager you typed doesn't exist on your system"
         exit 1
+    fi
 fi
 
-echo "$ID linux distro detected. Package manager set to $PKG_MNGR." 
+echo "Package manager set to $PKG_MNGR." 
 
 #Checking if docker version 2 is installed
 if ! command -v docker &>/dev/null; then
