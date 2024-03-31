@@ -170,7 +170,7 @@ get_points() {
     # Print the extracted values
     echo "$points"
 }
-monitor_score()  {
+is_gaining_points()  {
     publicKey="${1:-"$pubkey"}"
     local timeout=${2:-$POINTS_TIMEOUT}
     current_score="$(get_points "$publicKey")";
@@ -190,7 +190,7 @@ monitor_score()  {
     done
     #cecho " done" "green";
     gained_points=$((points_1 - points_0));
-    echo "$gained_points"
+    [[ $(($gained_points)) > 0 ]]
     }
 
 #Just a function to make sure that all nodes are not getting points for some global error
@@ -206,7 +206,7 @@ is_broker_down() {
     tested_nodes=0
     for key in "${public_keys[@]}"
     do
-        [[ $(($(monitor_score "$key" 15))) -gt 0 ]] && break
+        is_gaining_points "$key" 15  && break
         ((tested_nodes++))
     done
     [ "$tested_nodes" -eq "${#public_keys[@]}" ]
@@ -368,11 +368,12 @@ do
             if [ "$node_name" == '<name>' ] || [[ "$node_name" =~ [a-zA-Z]+-[a-zA-Z]+-[a-zA-Z]+ ]]
             then
                     echo "Generic name detected: $node_name."
-                    read -r -p "Please, enter your perfered node name or press ENTER to keep the same name: "
+                    read -r -p "Please, enter your perfered node name or press ENTER to keep the same name: " answer
             fi
             #Increasing timeout if name changed since detecting points take longer if name is changed
-            [ -z "$REPLY" ] && new_node_name="$node_name" || { new_node_name="$REPLY"; POINTS_TIMEOUT=60; }
+            [ -z "$answer" ] && new_node_name="$node_name" || { new_node_name="$answer"; POINTS_TIMEOUT=60; }
             echo "Setting your node name to $new_node_name"
+            node_name=$new_node_name
             #make sure wget is on the system
             ! command -v wget &>/dev/null && sudo "$PKG_MNGR" install wget -y &>/dev/null
             wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
@@ -396,7 +397,6 @@ do
             ;;
     esac
 done
-node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
 unchained_address=$(sudo cat conf/secrets.worker.yaml | grep address | head -n 1 | awk -F ': ' '{print $2}')
 cecho "Node has been repaired." "green"
 pubkey="$(get_publickey)"
@@ -411,8 +411,8 @@ echo "If your score should be higher then this."
 echo "Make sure you're using the right secret key in your secrets.worker.yaml file"
 echo "which resides in conf folder."
 cecho "Let's make sure your node is gaining points. Please wait..." "yellow"
-gained_points=$(("$(monitor_score)"))
-if [[ gained_points -ne 0 ]] 
+
+if is_gaining_points 
 then
     cecho "Your node is currently gaining points." "green" 
 else
