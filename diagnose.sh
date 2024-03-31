@@ -153,14 +153,14 @@ get_points() {
     command -v base58 &>/dev/null || { sudo "$PKG_MNGR" install base58 -y &>/dev/null; }
     command -v jq &>/dev/null || { sudo "$PKG_MNGR" install jq -y &>/dev/null; }
 
-    base58_key="$1"
+    #base58_key="$1"
 
     # Decode Base58 string to binary using base58 command
-    base58_decoded=$(echo "$base58_key" | base58 -d)
+    #base58_decoded=$(echo "$base58_key" | base58 -d)
 
     # Convert trimmed binary string to hexadecimal using xxd command
-    hex_key=$(echo -n "$base58_decoded" | xxd -p | tr -d '\n')
-
+    #hex_key=$(echo -n "$base58_decoded" | xxd -p | tr -d '\n')
+    hex_key="$1"
     # Construct the GraphQL query with the hex key variable
     query="{ \"query\": \"query Signers { signers (where: {key: \\\"$hex_key\\\"}) { edges { node { name points } } } }\" }"
 
@@ -405,38 +405,30 @@ done
 node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
 unchained_address=$(sudo cat conf/secrets.worker.yaml | grep address | head -n 1 | awk -F ': ' '{print $2}')
 cecho "Node has been repaired." "green"
-if [ "$ID" == "centos" ] 
+pubkey="$(get_publickey)"
+current_score="$(get_points "$pubkey" )"
+echo -n "Your node name is "
+cecho "${node_name}." "green"
+echo -n "Your address is "
+cecho "${unchained_address}." "green"
+echo -n "Your current score on the leadboard is "
+cecho "${current_score}." "green"
+echo "If your score should be higher then this."
+echo "Make sure you're using the right secret key in your secrets.worker.yaml file"
+echo "which resides in conf folder."
+cecho "Let's make sure your node is gaining points. Please wait..." "yellow"
+gained_points=$(("$(monitor_score)"))
+if [[ gained_points -ne 0 ]] 
+then
+    cecho "Your node is currently gaining points." "green" 
+else
+    cecho "Your node didn't gain any points for $POINTS_TIMEOUT seconds." "red";
+    cecho "Checking if the problem is with the brokers not with your node..." "yellow"
+    if  is_broker_down 
     then
-        echo "Sorry, score checking function is not currently available for CentOs operating systems."
-        echo "Please check your score manually on https://kenshi.io/unchained to confirm your node is"
-        echo "set up properly."
-        exit 1;
+        cecho  "Brokers are possibly down.The problem is not on your part." "green" 
     else
-        pubkey="$(get_publickey)"
-        current_score="$(get_points "$pubkey" )"
-        echo -n "Your node name is "
-        cecho "${node_name}." "green"
-        echo -n "Your address is "
-        cecho "${unchained_address}." "green"
-        echo -n "Your current score on the leadboard is "
-        cecho "${current_score}." "green"
-        echo "If your score should be higher then this."
-        echo "Make sure you're using the right secret key in your secrets.worker.yaml file"
-        echo "which resides in conf folder."
-        cecho "Let's make sure your node is gaining points. Please wait..." "yellow"
-        gained_points=$(("$(monitor_score)"))
-        if [[ gained_points -ne 0 ]] 
-        then
-        cecho "Your node is currently gaining points." "green" 
-        else
-            cecho "Your node didn't gain any points for $POINTS_TIMEOUT seconds." "red";
-            cecho "Checking if the problem is with the brokers not with your node..." "yellow"
-            if  is_broker_down 
-            then
-                cecho  "Brokers are possibly down.The problem is not on your part." "green" 
-            else
-                cecho "Other nodes are gaining points. The problem is on your part." "red" 
-            fi
+        cecho "Other nodes are gaining points. The problem is on your part." "red" 
     fi
 fi
 echo "For further help, please visit us at https://t.me/KenshiTech. Find us in Unchained channel."
