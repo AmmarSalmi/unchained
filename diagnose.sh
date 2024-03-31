@@ -9,7 +9,7 @@ POINTS_TIMEOUT=15
 echo "#################################################################################"
 echo "# Unchained Ironsmith                                                           #"
 echo "# A community-made tool to help diagnose and fix unchained node problem.        #"
-echo "# v1.2 Supports only docker nodes and tested only on ubuntu, debian, and centos #"
+echo "# v1.3 Supports only docker nodes and tested only on ubuntu, debian, and centos #"
 echo "#################################################################################"
 
 #Declaring functions here
@@ -87,9 +87,9 @@ pull_and_recreate() {
     cecho "Pulling latest image..." "yellow"
     update_response=$({ sudo ./unchained.sh worker pull; } 2>&1)
     cecho "Removing container..." "yellow"
-    remove_container_response=$({ sudo docker rm --force unchained_worker;} 2>&1)
+    sudo docker ps | grep -q unchained_worker  && remove_container_response=$({ sudo docker rm --force unchained_worker;} 2>&1)
     cecho "Starting up the node..." "yellow"
-    starting_response=$({ sudo ./unchained.sh up -d --force-recreate; } 2>&1)
+    starting_response=$({ sudo ./unchained.sh worker up -d --force-recreate; } 2>&1)
     echo "update response: $update_response || remove container response:$remove_container_response || recreate response: $starting_response" 
 }
 
@@ -150,17 +150,11 @@ sudo cat conf/secrets.worker.yaml | grep public | awk -F ': ' '{print $2}'
 
 #Use API to fetch the node points on the scoreboard
 get_points() {
-    command -v base58 &>/dev/null || { sudo "$PKG_MNGR" install base58 -y &>/dev/null; }
     command -v jq &>/dev/null || { sudo "$PKG_MNGR" install jq -y &>/dev/null; }
-
-    #base58_key="$1"
-
-    # Decode Base58 string to binary using base58 command
-    #base58_decoded=$(echo "$base58_key" | base58 -d)
-
-    # Convert trimmed binary string to hexadecimal using xxd command
-    #hex_key=$(echo -n "$base58_decoded" | xxd -p | tr -d '\n')
+    command -v curl &>/dev/null || { sudo "$PKG_MNGR" install curl -y &>/dev/null; }
+    
     hex_key="$1"
+    
     # Construct the GraphQL query with the hex key variable
     query="{ \"query\": \"query Signers { signers (where: {key: \\\"$hex_key\\\"}) { edges { node { name points } } } }\" }"
 
@@ -203,11 +197,11 @@ monitor_score()  {
 is_broker_down() {
     public_keys=(
     #ammarubuntu node
-    "qTs5AQ1985W3scp3rNDdu97YhUt6sLVN3uyxD9GU4siQj3MwmVBX9DLW9hqgwXR5AYGpSen9juvbcZUUkoUjMh8YY17wd5nBa45u7YP3d57AiqXWuVf1hw6FSrFxjuk17zW"
+    "8cafe3f3630e8a49bfc6fae1a3d4bd5db38458e34b781886f75cb8f25296416763a9e9feb1ef7da041238edcdbdaa63412445eb9030d2c9f58bbda0f7397a7cfeaf1fdf671de8dd7c42ca1010bf4d452d0d4889cb94439d004dd76a148d9a60f"
     #ammardebian node
-    "tj2PBQ32LKNMqWq9nWBJiGP1cmU2r5njasF4bzS3vW79NpCBUV9SVpDd2DGr6gxoyWQVjkLFeuL8RHqrDP2sk7fCV6RGPir9g8dvTrNbWcu8puZN3FnXPAeX15tbwGASW3u"
+    "96279fd86b29c018126f8be1c072095cbc2fc35f3933da38ce12e21c56e2e217f4735c4bf170675c0dd10b844e1b8ff6185b932214b266d3c5a6fb6901016db1a67d34606e6da75f6008126004279637f499c27cfe2bd691b12bf16c9fe8f714"
     #jay's node
-    "mR95NEFnVPuiNXRoBfmRHipTAJGWdz2q34KfwjHVp6ngn98P9DbrZUsA11WPQ6eMiRdUav8gSDYJRiGLBbE5ShnPzrVKnbjyULfY3ZAUTPSZSfQoLzRNocrgjnEGXitRpE8"
+    "80f0588b01cf7e2b1dae235c5a625ecf9d1c2b3d32eafe729fc9d551f1ef151a4fb30697344b05986ac565a7a29863b701091994bd3d18a43ad7a055bac555d7194d7556b90e278d5d624a801ee73980ac2131523bdc01894373eccba88af925"
     )
     tested_nodes=0
     for key in "${public_keys[@]}"
@@ -219,7 +213,7 @@ is_broker_down() {
 }
 
 #Detect linux dist and set the appropriate package manager
-#Some commands like wget, jq, base58 may not be installed by default on some machines
+#Some commands like wget, jq may not be installed by default on some machines
 #They are needed for this script to run properly
 if [ -f /etc/os-release ]; then
         . /etc/os-release
