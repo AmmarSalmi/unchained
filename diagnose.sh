@@ -56,6 +56,13 @@ function check_container_state()
 
 #TO-DO merge both isRunning and isRestarting in one check_state function
 # A function to check if container is running
+show_secretkey() {
+    [ -f conf/secrets.worker.yaml ] && secretkey=$(sudo cat conf/secrets.worker.yaml | grep secret | awk -F ': ' '{print $2}') || echo "Can't find secrets.worker.yaml"
+    first10chars=${secretkey: 0:10}
+    last10chars=${secretkey: -10}
+    echo "$first10chars**********$last10chars"
+}
+
 is_running() {
     check_container_state "running"
 }
@@ -427,11 +434,26 @@ echo -n "Your node name is "
 cecho "${node_name}." "green"
 echo -n "Your address is "
 cecho "${unchained_address}." "green"
-echo -n "Your current score on the leadboard is "
-cecho "${current_score}." "green"
-echo "If your score should be higher then this."
-echo "Make sure you're using the right secret key in your secrets.worker.yaml file"
-echo "which resides in conf folder."
+if [ "$current_score" == "null" ] || [[ $(($current_score)) < 100 ]]
+then
+    cecho "WARNING: Your node is possibly using a newly generated secret key" "yellow"
+    cecho "Please, make sure to put your old secret key in secrets.worker.yaml file."
+    echo -n "Your current secret key is "
+    cecho "$(show_secretkey)" "green"
+else
+    echo -n "Your current score on the leadboard is "
+    cecho "${current_score}." "green"
+    if [[ "$current_score" -lt 10000 ]]
+    then
+        cecho "LOW SCORE DETECTED" "yellow"
+        echo "If your score should be higher then this."
+        echo "Make sure you're using the right secret key in your secrets.worker.yaml file"
+        echo "which resides in conf folder."
+        echo -n "Your current secret key is "
+        cecho "$(show_secretkey)" "green"
+    fi
+fi
+
 cecho "Let's make sure your node is gaining points. Please wait..." "yellow"
 
 if is_gaining_points 
