@@ -31,18 +31,38 @@ cecho() {
     esac
 }
 
+#Using inspect to check docker container various states
+function check_container_state()
+{
+    #lowercase the argument
+    state_label=${1,,}
+    case $state_label in
+        run|running)
+            container_state=$(sudo docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME")
+            [ "$container_state" == "true" ]
+            ;;
+        rest|restarting)
+            #Docker often needs time to set .Restarting to true when node is restarting
+            sleep 3 
+            container_state=$(sudo docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME")
+            [ "$container_state" == "true" ]
+            ;;
+        *)
+            echo "check_container_state function doesn't recognize the queried lable"
+            return 1
+            ;;
+    esac
+}
+
 #TO-DO merge both isRunning and isRestarting in one check_state function
 # A function to check if container is running
-isRunning() {
-    container_state=$(sudo docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME")
-    echo "$container_state"
+is_running() {
+    check_container_state "running"
 }
 
 # A function to check if container is restarting
-isRestarting() {
-    sleep 3
-    container_state=$(sudo docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME")
-    echo "$container_state"
+is_restarting() {
+    check_container_state "restarting"
 }
 
 #Get the file path for the logs of the node
@@ -72,7 +92,7 @@ get_latest_version() {
 is_uptodate() {
 current_version="$(get_current_version)"
 latest_version="$(get_latest_version)"
-[ "$latest_version" == "$current_version" ] && echo "true" || echo "false"
+[[ "$latest_version" == "$current_version" ]]
 }
 
 #Check the release page if the most recent push is stable or alpha, beta, rc
@@ -101,8 +121,7 @@ safe_update() {
         cecho "Attempting to update with regular pull since latest image is a stable release" "yellow"
         response=$(pull_and_recreate)
         sleep 2
-        update_state=$(is_uptodate)
-        if [ "$update_state" == "true" ] 
+        if is_uptodate 
         then
             cecho "Node was updated successfully with a regular pull" "green"
             return 1
@@ -128,9 +147,8 @@ safe_update() {
         cecho "Starting up a node with stable release image..." "yellow"
         sudo ./unchained.sh worker up -d > /dev/null 1>&2
         sleep 2
-        update_state=$(is_uptodate)
-        if [[ "$update_state" == "true" ]] 
-        then
+        if  is_uptodate  
+            then
             cecho "Node was updated successfully to latest stable release" "green"
             return 1
         else
@@ -153,7 +171,7 @@ get_points() {
     command -v jq &>/dev/null || { sudo "$PKG_MNGR" install jq -y &>/dev/null; }
     command -v curl &>/dev/null || { sudo "$PKG_MNGR" install curl -y &>/dev/null; }
     
-    hex_key="$1"
+    hex_key="${1:-$PUBKEY}"
     
     # Construct the GraphQL query with the hex key variable
     query="{ \"query\": \"query Signers { signers (where: {key: \\\"$hex_key\\\"}) { edges { node { name points } } } }\" }"
@@ -171,7 +189,7 @@ get_points() {
     echo "$points"
 }
 is_gaining_points()  {
-    publicKey="${1:-"$pubkey"}"
+    publicKey="${1:-$PUBKEY}"
     local timeout=${2:-$POINTS_TIMEOUT}
     current_score="$(get_points "$publicKey")";
     points_0=$((current_score));
@@ -270,9 +288,11 @@ else
 fi
 
 
-# Inspecting unchained container to grab the working directory
+#Detecting the working directory of unchained node
 cecho "Attempting to auto-detect working directory of your node..." "yellow"
-if ! sudo docker inspect "$CONTAINER_NAME" &> /dev/null; then
+folder=""
+if ! sudo docker inspect "$CONTAINER_NAME" &> /dev/null
+then
     cecho "Error: $CONTAINER_NAME container doesn't exist" "red"
     cecho "Attempting to locate unchained folder" "yellow"
     
@@ -292,56 +312,56 @@ if ! sudo docker inspect "$CONTAINER_NAME" &> /dev/null; then
     echo "Which is your working directory of unchained node:"
     select option in "${files[@]}"; do
         if [ -n "$option" ]; then
-            cecho "Navigating to directory: $option" "yellow"
-            cd "$option" ||  { echo "Error: Failed to change directory to $option."; exit 1; }
-            cecho "Starting the node..." "yellow"
-            sudo ./unchained.sh worker up -d > /dev/null 2>&1
-            # Add your command to open the selected file here (e.g., open "$option")
+            folder="$option"
             break
         else
             echo "Invalid option. Please try again."
         fi
     done
+else
+    # Inspecting unchained container to grab the working directory
+    # Get the Docker inspect output
+    docker_inspect=$(sudo docker inspect --format='{{json .Config.Labels}}' "$CONTAINER_NAME")
+    # Extract the folder path using grep and awk
+    folder=$(echo "$docker_inspect" | grep -o '"com.docker.compose.project.working_dir":"[^"]*' | awk -F ':"' '{print $2}')
 
-    fi
-
-# Get the Docker inspect output
-docker_inspect=$(sudo docker inspect --format='{{json .Config.Labels}}' "$CONTAINER_NAME")
-# Extract the folder path using grep and awk
-folder=$(echo "$docker_inspect" | grep -o '"com.docker.compose.project.working_dir":"[^"]*' | awk -F ':"' '{print $2}')
+fi
 
 # Change directory to the folder where the Docker container was created
-cd "$folder" ||  { echo "Error: Failed to change directory to $folder."; exit 1; }
-cecho "Working directory detected $(pwd)" "green"
+echo "$folder"
+if [ ! -z "$folder" ]
+then
+    cecho "Working directory detected $(pwd)" "green"
+    cecho "Navigating to directory: $option" "yellow"
+    cd "$folder" ||  { echo "Error: Failed to change directory to $folder."; exit 1; }
+    cecho "Starting the node... $(pwd)" "yellow"
+    #sudo ./unchained.sh worker up -d --force-recreate &> /dev/null
+else
+    cecho "Unable to detect working directory of unchained node" "red"
+    exit 1
+fi
 
 
 cecho "Checking if the node is running..." "yellow"
-node_state=$(isRunning)
 start_node_escalation=1
 response=""
-while [[ $node_state == "false" ]]
+while ! is_running
 do
     cecho "The node is not running" "red"
     case $start_node_escalation in
+        #TO-DO these towo cases needs to be converted to one nested IF
         1)
             cecho "Starting the node attempt $start_node_escalation" "yellow"
-            response=$( { sudo ./unchained.sh worker up -d; } 2>&1)
-            node_state=$(isRunning)
-            ((start_node_escalation++))
-            ;;
-        2)
-            echo "Starting the node attempt $start_node_escalation"
-            if echo "$response" | grep -q Conflict
+            if ! sudo ./unchained.sh worker up -d --force-recreate &> /dev/null
             then
-                echo "Removing conflicting container"
-                response=$( { sudo docker rm --force $CONTAINER_NAME && sudo ./unchained.sh worker up -d; } 2>&1)
-                node_state=$(isRunning)
+                echo "Removing possible conflicting container"
+                response="$( { sudo docker rm --force $CONTAINER_NAME && sudo ./unchained.sh worker up -d --force-recreate; } 2>&1)"
             fi
             ((start_node_escalation++))
             ;;
-
         *)
-            echo "Unknown problem while trying to run the node $response"
+            cecho "Unknown problem while trying to run the node:" "red"
+            echo "$response"
             exit 1
             ;;
     esac
@@ -353,26 +373,23 @@ then
 else
     cecho "Node started successfully" "green"
 fi
-#Giving the node a time to run
 
 #Check restarting status to determin if there is a problem with the node
 cecho "Checking if the node keep restarting because of an error and if outdated" "yellow"
-node_restarting=$(isRestarting)
-node_uptodate=$(is_uptodate)
 fix_node_escalation=1
 response=""
-while [[ $node_restarting == "true" ]] || [[ $node_uptodate == "false" ]]
+while is_restarting || ! is_uptodate
 do
-    [[ $node_restarting == "true" ]] && cecho "Node keeps restarting" "yellow"
-    [[ $node_uptodate == "false" ]] && cecho "Node is either outdated or using an unstable release" "yellow"
+    is_restarting && cecho "Node keeps restarting" "yellow"
+    ! is_uptodate && cecho "Node is either outdated or using an unstable release" "yellow"
     case $fix_node_escalation in
         1)
             cecho "Fixing the error attempt $fix_node_escalation: updating conf file." "yellow"
-            #TO-DO detecting generic node names with regex
+            #DONE: detecting generic node names with regex
             node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
-            if [ "$node_name" == '<name>' ] || [[ "$node_name" =~ [a-zA-Z]+-[a-zA-Z]+-[a-zA-Z]+ ]]
+            if [ -z "$nodename" ] || [ "$node_name" == '<name>' ] || [[ "$node_name" =~ [a-zA-Z]+-[a-zA-Z]+-[a-zA-Z]+ ]]
             then
-                    echo "Generic name detected: $node_name."
+                    echo "Generic or null name detected: $node_name."
                     read -r -p "Please, enter your perfered node name or press ENTER to keep the same name: " answer
             fi
             #Increasing timeout if name changed since detecting points take longer if name is changed
@@ -380,21 +397,18 @@ do
             echo "Setting your node name to $new_node_name"
             node_name=$new_node_name
             #make sure wget is on the system
+            #TO-DO use a variable for install keyword so you take care of special case of PACMAN manager
             ! command -v wget &>/dev/null && sudo "$PKG_MNGR" install wget -y &>/dev/null
-            wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
-            sed -i "s/<name>/$new_node_name/g" conf.yaml
+            sudo wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
+            sudo sed -i "s/<name>/$new_node_name/g" conf.yaml
             sudo mv conf.yaml conf/conf.worker.yaml
             sudo ./unchained.sh worker restart 2>/dev/null
             ((fix_node_escalation++))
-            node_restarting=$(isRestarting)
-            node_uptodate=$(is_uptodate)
             ;;
         2)
             cecho "Fixing the error attempt $fix_node_escalation: updating the node." "yellow"
             safe_update
             ((fix_node_escalation++))
-            node_restarting=$(isRestarting)
-            node_uptodate=$(is_uptodate)
             ;;
         *)
             cecho "Unknown error" "red"
@@ -404,8 +418,11 @@ do
 done
 unchained_address=$(sudo cat conf/secrets.worker.yaml | grep address | head -n 1 | awk -F ': ' '{print $2}')
 cecho "Node has been repaired." "green"
-pubkey="$(get_publickey)"
-current_score="$(get_points "$pubkey" )"
+#Current node public key constant
+PUBKEY="$(get_publickey)"
+
+#Getting the node score on the leadboard
+current_score="$(get_points "$PUBKEY" )"
 echo -n "Your node name is "
 cecho "${node_name}." "green"
 echo -n "Your address is "
