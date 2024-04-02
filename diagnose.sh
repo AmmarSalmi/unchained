@@ -58,9 +58,9 @@ function check_container_state()
 # A function to check if container is running
 show_secretkey() {
     [ -f conf/secrets.worker.yaml ] && secretkey=$(sudo cat conf/secrets.worker.yaml | grep secret | awk -F ': ' '{print $2}') || echo "Can't find secrets.worker.yaml"
-    first10chars=${secretkey: 0:10}
-    last10chars=${secretkey: -10}
-    echo "$first10chars**********$last10chars"
+    first4chars=${secretkey: 0:4}
+    last4chars=${secretkey: -4}
+    echo "$first4chars**********$last4chars"
 }
 
 is_running() {
