@@ -317,8 +317,8 @@ fi
 echo "Setting your node name to $new_node_name"
 #make sure wget is on the system
 ! command -v wget &>/dev/null && sudo "$PKG_MNGR" install wget -y &>/dev/null
-wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
-sed -i "s/<name>/$new_node_name/g" conf.yaml
+sudo wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
+sudo sed -i "s/<name>/$new_node_name/g" conf.yaml
 sudo mv conf.yaml conf/conf.worker.yaml
 sudo ./unchained.sh worker restart 2>/dev/null
 node_name="$new_node_name"
