@@ -3,8 +3,9 @@
 #the docker image name for unchained worker
 CONTAINER_NAME="unchained_worker"
 #default value for timeout when monitoring points increase on leadboard
-POINTS_TIMEOUT=15
-
+POINTS_TIMEOUT=39
+#A variable so latest stable  release is only fetched once from the internet
+LATEST_RELEASE=""
 #Welcome message and explanation
 echo "#################################################################################"
 echo "# Unchained Ironsmith                                                           #"
@@ -30,7 +31,28 @@ cecho() {
         ;;
     esac
 }
+#Goodbye message
+goodbye() {
+    local result=$1
+    case "$result" in
 
+    success)
+        cecho "You're node is now repaired. Thank you for using IronSmith." "green"
+        ;;
+
+    failure)
+        cecho "The node is still broken. Sorry we coudn't help" "red"
+        ;;
+    
+    *)
+        echo "Goodbye"
+        ;;
+    
+    esac
+
+    echo "For further help, please visit us at https://t.me/KenshiTech. Find us in Unchained channel."
+    exit 0
+}
 #Using inspect to check docker container various states
 function check_container_state()
 {
@@ -43,7 +65,6 @@ function check_container_state()
             ;;
         rest|restarting)
             #Docker often needs time to set .Restarting to true when node is restarting
-            sleep 3 
             container_state=$(sudo docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME")
             [ "$container_state" == "true" ]
             ;;
@@ -53,9 +74,7 @@ function check_container_state()
             ;;
     esac
 }
-
-#TO-DO merge both isRunning and isRestarting in one check_state function
-# A function to check if container is running
+#Grab secret key from secrets file and obscure most of it
 show_secretkey() {
     [ -f conf/secrets.worker.yaml ] && secretkey=$(sudo cat conf/secrets.worker.yaml | grep secret | awk -F ': ' '{print $2}') || echo "Can't find secrets.worker.yaml"
     first4chars=${secretkey: 0:4}
@@ -63,6 +82,7 @@ show_secretkey() {
     echo "$first4chars**********$last4chars"
 }
 
+# A function to check if container is running
 is_running() {
     check_container_state "running"
 }
@@ -72,27 +92,79 @@ is_restarting() {
     check_container_state "restarting"
 }
 
-#Get the file path for the logs of the node
-#Better source to catch useful information
-#Using ./unchained.sh worker logs -f is dynamic and could be troublesome
 get_logs_path() {
     container_logs=$(sudo docker inspect --format='{{.LogPath}}' "$CONTAINER_NAME")
     echo "$container_logs"
 }
 
+count_lines() {
+    sudo cat "$(get_logs_path)" | wc -l
+}
+
+is_healthy() {
+    printf "Checcking node health. Please wait...\n"
+    num_lines=$(count_lines)
+    num_new_lines=0
+    while (( num_new_lines < 11 ))
+    do
+        sleep 3
+        new_count=$(count_lines)
+        num_new_lines=$(( num_new_lines + new_count - num_lines ))
+        num_lines=$new_count
+    done
+    container_logs=$(sudo cat "$(get_logs_path)" | tail -n 11)
+    [[ $(grep -cvE "INF|ERR" <<< "$container_logs") == 0 ]]
+}
+
+check_rpc() {
+# Ethereum RPC endpoint URL
+RPC_URL="https://$1"
+
+# JSON-RPC request data
+REQUEST='{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# Send the JSON-RPC request using curl
+response=$(curl -s -X POST -H "Content-Type: application/json" --data "$REQUEST" "$RPC_URL")
+
+[[ "$response" =~ "result" ]]
+}
+
+#If we add a working rpc but some of them are not responding, the node will still give rpc error
+#This function was created to remove bad rpcs
+remove_bad_rpcs() {
+#parsing the conf file to get all links except for broker
+rpcs_links=$(sudo cat conf/conf.worker.yaml | grep https | grep -iv broker | awk -F '://' '{print $2}')
+# Loop through the list parsed from conf.worker.yaml
+while IFS= read -r link; do
+    if ! check_rpc "$link"; then
+        # Remove the line containing the link from conf.yaml
+        sudo sed -i "/$link/d" conf/conf.worker.yaml
+        echo "Removing bad rpc: $link"
+    else
+        echo "$link seems good"
+    fi
+done <<< $rpcs_links
+}
+
 #Check the node logs for the currently used unchained version
 get_current_version()  {
     #check current version
-    logs_path=$(get_logs_path)
-    version=$(sudo cat "$logs_path" | grep 'Version' | tail -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 )
+    version=$(sudo cat "$(get_logs_path)" | grep Version | tail -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 )
     echo "$version"
 }
 
 #Get the latest stable release from release page on github
 #TO-DO It's hard-coded and might need more finess to able to adapt in possible pages in the web page
+#TO-DO check internet connectivity function is needed
 get_latest_version() {
-    latest_version=$(curl -s "https://github.com/KenshiTech/unchained/releases" | grep 'releases/tag/v' | grep -iEv 'alpha|beta|rc'| head -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-    echo "$latest_version"
+    if [ -z "$LATEST_RELEASE" ]
+    then
+        local latest_version=$(curl -s "https://github.com/KenshiTech/unchained/releases" | grep 'releases/tag/v' | grep -iEv 'alpha|beta|rc'| head -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+        LATEST_RELEASE="$latest_version"
+        echo "$latest_version"
+    else
+        echo "$LATEST_RELEASE"
+    fi
 }
 
 #Compare the current version of the node to the latest stable release
@@ -106,7 +178,7 @@ latest_version="$(get_latest_version)"
 is_latest_stable() {
     releases_url="https://github.com/KenshiTech/unchained/releases"
     release=$(curl -s $releases_url | grep 'releases/tag/v' | head -n 1 | grep -iE 'alpha|beta|rc')
-    [ -z "$release" ] && echo 'true' || echo 'false'
+    [ -z "$release" ]
 }
 
 #Simple pull and "up -d" sequence
@@ -122,7 +194,7 @@ pull_and_recreate() {
 
 #Trying to update the node without catching an alph/beta/rc release by mistake
 safe_update() {
-    if [ "$(is_latest_stable)" == "true" ]
+    if is_latest_stable
     then
         #updating the node with regular "pull" and "up -d"
         cecho "Attempting to update with regular pull since latest image is a stable release" "yellow"
@@ -131,12 +203,12 @@ safe_update() {
         if is_uptodate 
         then
             cecho "Node was updated successfully with a regular pull" "green"
-            return 1
+            return 0
         else
             cecho "Node update failed" "red"
             cecho "responses from update attempt:" "yellow"
             echo -e "$response"
-            return 0
+            return 1
         fi
     else
         #dodging alpha release
@@ -157,12 +229,10 @@ safe_update() {
         if  is_uptodate  
             then
             cecho "Node was updated successfully to latest stable release" "green"
-            return 1
+            return 0
         else
             echo "Node update failed"
-            #cecho "responses from update attempt:" "yellow"
-            #echo -e "$response"
-            return 0
+            return 1
         fi
     fi
 
@@ -170,13 +240,14 @@ safe_update() {
 
 #Get the current node public key
 get_publickey() {
-sudo cat conf/secrets.worker.yaml | grep public | awk -F ': ' '{print $2}'
+pubk=$(sudo cat conf/secrets.worker.yaml | grep public | awk -F ': ' '{print $2}')
+echo "$pubk"
 }
 
 #Use API to fetch the node points on the scoreboard
 get_points() {
-    command -v jq &>/dev/null || { sudo "$PKG_MNGR" install jq -y &>/dev/null; }
-    command -v curl &>/dev/null || { sudo "$PKG_MNGR" install curl -y &>/dev/null; }
+    command -v jq &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" jq -y &>/dev/null; }
+    command -v curl &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" curl -y &>/dev/null; }
     
     hex_key="${1:-$PUBKEY}"
     
@@ -196,13 +267,18 @@ get_points() {
     echo "$points"
 }
 is_gaining_points()  {
+    #First argument is a public key or defaulting to the current node key
     publicKey="${1:-$PUBKEY}"
+    cecho "Checking if your node is gaining points. Please be patient. This could take a while..."
+    
+    #How long it should wait to come to a conclusion about gaining point
     local timeout=${2:-$POINTS_TIMEOUT}
+    
+    #Getting the score every 3 seconds till timemout is reached or score increase detected    
     current_score="$(get_points "$publicKey")";
     points_0=$((current_score));
     updated_points="$current_score";
     points_1=$((updated_points));
-    #echo -n "Monitoring score to detect change. Please wait.";
     waiting_time=0;
     TIME_INCREMENT=3;
     while (( points_1 == points_0 )) && (( waiting_time < timeout ));
@@ -211,14 +287,12 @@ is_gaining_points()  {
         updated_points="$(get_points "$publicKey")";
         points_1=$((updated_points));
         ((waiting_time += $((TIME_INCREMENT)) ));
-        #echo -n ".";
     done
-    #cecho " done" "green";
     gained_points=$((points_1 - points_0));
     [[ $(($gained_points)) > 0 ]]
     }
 
-#Just a function to make sure that all nodes are not getting points for some global error
+#Checking if all nodes are not getting points for some global error
 is_broker_down() {
     public_keys=(
     #ammarubuntu node
@@ -236,10 +310,14 @@ is_broker_down() {
     done
     [ "$tested_nodes" -eq "${#public_keys[@]}" ]
 }
+##################################
+#THE END OF FUNCTION DECLARATIONS#
+##################################
 
 #Detect linux dist and set the appropriate package manager
 #Some commands like wget, jq may not be installed by default on some machines
 #They are needed for this script to run properly
+INSTALL_COMMAND="install"
 if command -v apt &>/dev/null; then
     PKG_MNGR="apt"
 elif command -v yum &>/dev/null; then
@@ -248,6 +326,7 @@ elif command -v dnf &>/dev/null; then
     PKG_MNGR="apt"
 elif command -v pacman &>/dev/null; then
     PKG_MNGR="apt"
+    INSTALL_COMMAND="-S"
 else
     echo "Unknown package manager"
     read -p -r "Please type your package manager: " pm_answer
@@ -338,10 +417,10 @@ fi
 echo "$folder"
 if [ ! -z "$folder" ]
 then
-    cecho "Working directory detected $(pwd)" "green"
+    cecho "Working directory detected: $folder" "green"
     cecho "Navigating to directory: $option" "yellow"
     cd "$folder" ||  { echo "Error: Failed to change directory to $folder."; exit 1; }
-    cecho "Starting the node... $(pwd)" "yellow"
+    cecho "Starting the node from $(pwd)" "yellow"
     #sudo ./unchained.sh worker up -d --force-recreate &> /dev/null
 else
     cecho "Unable to detect working directory of unchained node" "red"
@@ -382,19 +461,18 @@ else
 fi
 
 #Check restarting status to determin if there is a problem with the node
-cecho "Checking if the node keep restarting because of an error and if outdated" "yellow"
+
+#Getting node name
+node_name=$(sudo cat conf/conf.worker.yaml | grep name | head -n 1 | awk -F ': ' '{print $2}')
 fix_node_escalation=1
 response=""
-while is_restarting || ! is_uptodate
+while ! is_healthy 
 do
-    is_restarting && cecho "Node keeps restarting" "yellow"
-    ! is_uptodate && cecho "Node is either outdated or using an unstable release" "yellow"
     case $fix_node_escalation in
         1)
             cecho "Fixing the error attempt $fix_node_escalation: updating conf file." "yellow"
             #DONE: detecting generic node names with regex
-            node_name=$(sudo cat conf/conf.worker.yaml | grep name: | head -n 1 | awk -F ': ' '{print $2}')
-            if [ -z "$nodename" ] || [ "$node_name" == '<name>' ] || [[ "$node_name" =~ [a-zA-Z]+-[a-zA-Z]+-[a-zA-Z]+ ]]
+            if [ -z "$node_name" ] || [ "$node_name" == '<name>' ] || [[ "$node_name" =~ [a-zA-Z]+-[a-zA-Z]+-[a-zA-Z]+ ]]
             then
                     echo "Generic or null name detected: $node_name."
                     read -r -p "Please, enter your perfered node name or press ENTER to keep the same name: " answer
@@ -405,7 +483,7 @@ do
             node_name=$new_node_name
             #make sure wget is on the system
             #TO-DO use a variable for install keyword so you take care of special case of PACMAN manager
-            ! command -v wget &>/dev/null && sudo "$PKG_MNGR" install wget -y &>/dev/null
+            ! command -v wget &>/dev/null && sudo "$PKG_MNGR" "$INSTALL_COMMAND" wget -y &>/dev/null
             sudo wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
             sudo sed -i "s/<name>/$new_node_name/g" conf.yaml
             sudo mv conf.yaml conf/conf.worker.yaml
@@ -417,14 +495,72 @@ do
             safe_update
             ((fix_node_escalation++))
             ;;
+        3)
+            cecho "Fixing the error attempt $fix_node_escalation: LAST ATTEMPT: reinstall." "yellow"
+            choice="x"
+            while ! "$choice"
+            do
+                read -r -p "Would you like to reinstall the node from scratch?(y/n)" choice
+                choice=${choice,,}
+                case $choice in
+                    y)
+                        break
+                        ;;
+                    n)
+                        goodbye "failure"
+                        ;;
+                    *)
+                        echo "Please type y for yes or n for no."
+                        ;;
+                esac
+            done
+            #Reinstalling from scratch as last resort to fix node
+            cecho "Reinstalling your node..." "yellow"
+
+            cecho "Navigating to your home directory..." "yellow"
+            cd ~ || { echo "Couldn't get to home directory"; exit 1; }
+            mapfile -t files < <(sudo find . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type d -name "conf" -printf "%h\n" \;)
+
+            #Installing needed commands
+            command -v unzip &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" unzip -y &>/dev/null; }
+            command -v wget &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" wget -y &>/dev/null; }
+
+            #parsing latest release version number from releases page on github
+            latest=$(get_latest_version)
+
+            cecho "Downloading docker zip file..." "yellow"
+            sudo wget -q https://github.com/KenshiTech/unchained/releases/download/v"$latest"/unchained-v"$latest"-docker.zip -O unchained-v"$latest"-docker.zip
+
+            cecho "Unziping downloaded file..." "yellow"
+            sudo unzip unchained-v"$latest"-docker.zip 1> /dev/null || { echo "Couldn't unzip file"; exit 1; }
+
+            cecho "Navigating to decompressed folder..." "yellow"
+            cd unchained-v"$latest"-docker
+
+            cecho "Removing old unchained container..." "yellow"
+            sudo docker rm --force unchained_worker 1> /dev/null
+            
+            #importing old keys
+            old_directory="$folder"
+            cecho "Importing old conf and secrets files and starting the node..." "yellow"
+            sudo cp -r "$old_directory"/conf .
+
+            #Double check the conf file is fixed
+            sudo wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf/conf.worker.yaml
+            node_name=$(sudo cat "$old_directory"/conf/conf.worker.yaml | grep name | head -n 1 | awk -F ': ' '{print $2}')
+            sudo sed -i "s/<name>/$node_name/g" conf/conf.worker.yaml
+            #Starting the node
+            sudo ./unchained.sh worker up -d --force-recreate 1> /dev/null
+            ((fix_node_escalation++))
+            ;;
         *)
-            cecho "Unknown error" "red"
-            exit 1
+            cecho "All possible fixes have been tried." "red"
+            break
             ;;
     esac
 done
+
 unchained_address=$(sudo cat conf/secrets.worker.yaml | grep address | head -n 1 | awk -F ': ' '{print $2}')
-cecho "Node has been repaired." "green"
 #Current node public key constant
 PUBKEY="$(get_publickey)"
 
@@ -454,19 +590,48 @@ else
     fi
 fi
 
-cecho "Let's make sure your node is gaining points. Please wait..." "yellow"
+fix_node_escalation=1
+response=""
+while ! is_gaining_points 
+do
+    case $fix_node_escalation in
+        1)
+            cecho "Your node is not gaining points." "red"
+            cecho "Checking rpc problem." "yellow"
+            if sudo docker logs -n "$output_sample" "$CONTAINER_NAME" | grep ERR | grep -qi rpc 
+            then
+                #TO-DO the line number of rpcs is still hardcoded
+                cecho "Possible bad rpc in conf. Adding merkle..." "yellow"
+                sudo head -n 8 conf/conf.worker.yaml > temp.yaml  
+                echo "    - https://eth.merkle.io" >> temp.yaml 
+                sudo tail -n +9 conf/conf.worker.yaml >> temp.yaml 
+                sudo mv temp.yaml conf/conf.worker.yaml
+                #Bad rpcs needs to be removed for node to work properly apparently
+                remove_bad_rpcs  
+                sudo ./unchained.sh worker restart &> /dev/null
+                sleep 3
+            else
+                cecho "No bad rpc error detected" "yellow"
+            fi
+            ((fix_node_escalation++))
+            ;;
+        *)
+            cecho "All possible fixes have been tried." "red"
+            cecho "Checking if the problem is with the brokers not with your node..." "yellow"
+            if  is_broker_down 
+            then
+                cecho  "Brokers are possibly down.The problem is not on your part." "green"
+                goodbye 
+            else
+                cecho "Other nodes are gaining points. The problem is on your part." "red"
+                goodbye "failure"
+            fi
+            break
+            ;;
+    esac
+done
 
-if is_gaining_points 
-then
-    cecho "Your node is currently gaining points." "green" 
-else
-    cecho "Your node didn't gain any points for $POINTS_TIMEOUT seconds." "red";
-    cecho "Checking if the problem is with the brokers not with your node..." "yellow"
-    if  is_broker_down 
-    then
-        cecho  "Brokers are possibly down.The problem is not on your part." "green" 
-    else
-        cecho "Other nodes are gaining points. The problem is on your part." "red" 
-    fi
-fi
-echo "For further help, please visit us at https://t.me/KenshiTech. Find us in Unchained channel."
+cecho "Your node is currently gaining points." "green" 
+goodbye "success"
+    
+
