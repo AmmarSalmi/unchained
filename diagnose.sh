@@ -115,7 +115,7 @@ is_healthy() {
     container_logs=$(sudo cat "$(get_logs_path)" | tail -n 11)
     [[ $(grep -cvE "INF|ERR" <<< "$container_logs") == 0 ]]
 }
-
+#TO-DO this function needs to be able to check WSS protocol 
 check_rpc() {
 # Ethereum RPC endpoint URL
 RPC_URL="https://$1"
@@ -132,18 +132,23 @@ response=$(curl -s -X POST -H "Content-Type: application/json" --data "$REQUEST"
 #If we add a working rpc but some of them are not responding, the node will still give rpc error
 #This function was created to remove bad rpcs
 remove_bad_rpcs() {
+
 #parsing the conf file to get all links except for broker
-rpcs_links=$(sudo cat conf/conf.worker.yaml | grep https | grep -iv broker | awk -F '://' '{print $2}')
+rpcs_links=$(sudo cat conf/conf.worker.yaml | grep :// | grep -iv broker | awk -F '://' '{print $2}')
+
 # Loop through the list parsed from conf.worker.yaml
+bad_rpcs=0
 while IFS= read -r link; do
     if ! check_rpc "$link"; then
         # Remove the line containing the link from conf.yaml
         sudo sed -i "/$link/d" conf/conf.worker.yaml
         echo "Removing bad rpc: $link"
+        ((bad_rpcs++))
     else
         echo "$link seems good"
     fi
 done <<< $rpcs_links
+[[ $bad_rpcs -gt 0 ]]
 }
 
 #Check the node logs for the currently used unchained version
@@ -246,9 +251,6 @@ echo "$pubk"
 
 #Use API to fetch the node points on the scoreboard
 get_points() {
-    command -v jq &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" jq -y &>/dev/null; }
-    command -v curl &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" curl -y &>/dev/null; }
-    
     hex_key="${1:-$PUBKEY}"
     
     # Construct the GraphQL query with the hex key variable
@@ -341,6 +343,12 @@ fi
 
 echo "Package manager set to $PKG_MNGR." 
 
+#Installing necessary tools
+cecho "Installing necessary commands for the script: wget, curl, jq " "yellow"
+command -v jq &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" jq -y &>/dev/null; }
+command -v curl &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" curl -y &>/dev/null; }
+command -v wget &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" wget -y &>/dev/null; }
+
 #Checking if docker version 2 is installed
 if ! command -v docker &>/dev/null; then
   cecho "Error: docker could not be found on your system!" "red"
@@ -414,7 +422,6 @@ else
 fi
 
 # Change directory to the folder where the Docker container was created
-echo "$folder"
 if [ ! -z "$folder" ]
 then
     cecho "Working directory detected: $folder" "green"
@@ -435,7 +442,6 @@ while ! is_running
 do
     cecho "The node is not running" "red"
     case $start_node_escalation in
-        #TO-DO these towo cases needs to be converted to one nested IF
         1)
             cecho "Starting the node attempt $start_node_escalation" "yellow"
             if ! sudo ./unchained.sh worker up -d --force-recreate &> /dev/null
@@ -482,8 +488,6 @@ do
             echo "Setting your node name to $new_node_name"
             node_name=$new_node_name
             #make sure wget is on the system
-            #TO-DO use a variable for install keyword so you take care of special case of PACMAN manager
-            ! command -v wget &>/dev/null && sudo "$PKG_MNGR" "$INSTALL_COMMAND" wget -y &>/dev/null
             sudo wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
             sudo sed -i "s/<name>/$new_node_name/g" conf.yaml
             sudo mv conf.yaml conf/conf.worker.yaml
@@ -521,9 +525,7 @@ do
             cd ~ || { echo "Couldn't get to home directory"; exit 1; }
             mapfile -t files < <(sudo find . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type d -name "conf" -printf "%h\n" \;)
 
-            #Installing needed commands
             command -v unzip &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" unzip -y &>/dev/null; }
-            command -v wget &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" wget -y &>/dev/null; }
 
             #parsing latest release version number from releases page on github
             latest=$(get_latest_version)
@@ -553,6 +555,18 @@ do
             sudo ./unchained.sh worker up -d --force-recreate 1> /dev/null
             ((fix_node_escalation++))
             ;;
+        4)
+            if remove_bad_rpcs; then  
+            cecho "Possible bad rpc in conf. Adding merkle..." "yellow"
+            sudo head -n 8 conf/conf.worker.yaml > temp.yaml  
+            echo "    - https://eth.merkle.io" >> temp.yaml 
+            sudo tail -n +9 conf/conf.worker.yaml >> temp.yaml 
+            sudo mv temp.yaml conf/conf.worker.yaml
+            sudo ./unchained.sh worker restart &> /dev/null
+            sleep 3
+            fi
+            ((fix_node_escalation++))
+            ;;
         *)
             cecho "All possible fixes have been tried." "red"
             break
@@ -560,9 +574,50 @@ do
     esac
 done
 
+PUBKEY="$(get_publickey)"
+fix_node_escalation=1
+response=""
+while ! is_gaining_points 
+do
+    case $fix_node_escalation in
+        1)
+            cecho "Your node is not gaining points." "red"
+            cecho "Checking rpc problem." "yellow"
+            if sudo cat "$(get_logs_path)" | tail -n 10 | grep ERR | grep -qi rpc 
+            then
+                #TO-DO the line number of rpcs is still hardcoded
+                if remove_bad_rpcs; then  
+                cecho "Possible bad rpc in conf. Adding merkle..." "yellow"
+                sudo head -n 8 conf/conf.worker.yaml > temp.yaml  
+                echo "    - https://eth.merkle.io" >> temp.yaml 
+                sudo tail -n +9 conf/conf.worker.yaml >> temp.yaml 
+                sudo mv temp.yaml conf/conf.worker.yaml
+                sudo ./unchained.sh worker restart &> /dev/null
+                sleep 3
+                fi
+            else
+                cecho "No bad rpc error detected" "yellow"
+            fi
+            ((fix_node_escalation++))
+            ;;
+        *)
+            cecho "All possible fixes have been tried." "red"
+            cecho "Checking if the problem is with the brokers not with your node..." "yellow"
+            if  is_broker_down 
+            then
+                cecho  "Brokers are possibly down.The problem is not on your part." "green"
+                goodbye 
+            else
+                cecho "Other nodes are gaining points. The problem is on your part." "red"
+                goodbye "failure"
+            fi
+            break
+            ;;
+    esac
+done
+
 unchained_address=$(sudo cat conf/secrets.worker.yaml | grep address | head -n 1 | awk -F ': ' '{print $2}')
 #Current node public key constant
-PUBKEY="$(get_publickey)"
 
 #Getting the node score on the leadboard
 current_score="$(get_points "$PUBKEY" )"
@@ -589,47 +644,6 @@ else
         cecho "$(show_secretkey)" "green"
     fi
 fi
-
-fix_node_escalation=1
-response=""
-while ! is_gaining_points 
-do
-    case $fix_node_escalation in
-        1)
-            cecho "Your node is not gaining points." "red"
-            cecho "Checking rpc problem." "yellow"
-            if sudo docker logs -n "$output_sample" "$CONTAINER_NAME" | grep ERR | grep -qi rpc 
-            then
-                #TO-DO the line number of rpcs is still hardcoded
-                cecho "Possible bad rpc in conf. Adding merkle..." "yellow"
-                sudo head -n 8 conf/conf.worker.yaml > temp.yaml  
-                echo "    - https://eth.merkle.io" >> temp.yaml 
-                sudo tail -n +9 conf/conf.worker.yaml >> temp.yaml 
-                sudo mv temp.yaml conf/conf.worker.yaml
-                #Bad rpcs needs to be removed for node to work properly apparently
-                remove_bad_rpcs  
-                sudo ./unchained.sh worker restart &> /dev/null
-                sleep 3
-            else
-                cecho "No bad rpc error detected" "yellow"
-            fi
-            ((fix_node_escalation++))
-            ;;
-        *)
-            cecho "All possible fixes have been tried." "red"
-            cecho "Checking if the problem is with the brokers not with your node..." "yellow"
-            if  is_broker_down 
-            then
-                cecho  "Brokers are possibly down.The problem is not on your part." "green"
-                goodbye 
-            else
-                cecho "Other nodes are gaining points. The problem is on your part." "red"
-                goodbye "failure"
-            fi
-            break
-            ;;
-    esac
-done
 
 cecho "Your node is currently gaining points." "green" 
 goodbye "success"
