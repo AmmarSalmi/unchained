@@ -60,13 +60,15 @@ function check_container_state()
     state_label=${1,,}
     case $state_label in
         run|running)
-            container_state=$(sudo docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME")
-            [ "$container_state" == "true" ]
+            container_state=$(sudo docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME") &> /dev/null && \
+            [ "$container_state" == "true" ] || \
+            false
             ;;
         rest|restarting)
             #Docker often needs time to set .Restarting to true when node is restarting
-            container_state=$(sudo docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME")
-            [ "$container_state" == "true" ]
+            container_state=$(sudo docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME") &> /dev/null && \
+            [ "$container_state" == "true" ] || \
+            false
             ;;
         *)
             echo "check_container_state function doesn't recognize the queried lable"
@@ -191,7 +193,7 @@ pull_and_recreate() {
     cecho "Pulling latest image..." "yellow"
     update_response=$({ sudo ./unchained.sh worker pull; } 2>&1)
     cecho "Removing container..." "yellow"
-    sudo docker ps | grep -q unchained_worker  && remove_container_response=$({ sudo docker rm --force unchained_worker;} 2>&1)
+    sudo docker ps | grep -q $CONTAINER_NAME  && remove_container_response=$({ sudo docker rm --force $CONTAINER_NAME;} 2>&1)
     cecho "Starting up the node..." "yellow"
     starting_response=$({ sudo ./unchained.sh worker up -d --force-recreate; } 2>&1)
     echo "update response: $update_response || remove container response:$remove_container_response || recreate response: $starting_response" 
@@ -227,7 +229,7 @@ safe_update() {
         cecho "Tagging image as latest..." "yellow"
         sudo docker tag ghcr.io/timeleaplabs/unchained:v"$latest_stable" ghcr.io/timeleaplabs/unchained:latest >/dev/null
         cecho "Removing container..." "yellow"
-        sudo docker rm --force unchained_worker >/dev/null
+        sudo docker rm --force $CONTAINER_NAME >/dev/null
         cecho "Starting up a node with stable release image..." "yellow"
         sudo ./unchained.sh worker up -d > /dev/null 1>&2
         sleep 2
@@ -396,7 +398,7 @@ then
     cd ~ || { echo "Error: Failed to change directory to the home directory."; exit 1; }
     
     # Store search results in an array
-    mapfile -t files < <(sudo find . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type f -name "unchained.sh" -printf "%h\n" \;)
+    mapfile -t files < <(sudo find $HOME -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type f -name "unchained.sh" -printf "%h\n" \;)
 
     # Check if any files were found
     if [ ${#files[@]} -eq 0 ]; then
@@ -408,7 +410,7 @@ then
     echo "Which is your working directory of unchained node:"
     select option in "${files[@]}"; do
         if [ -n "$option" ]; then
-            folder="$option"
+            folder="${option}"
             break
         else
             echo "Invalid option. Please try again."
@@ -430,7 +432,6 @@ then
     cecho "Navigating to directory: $folder" "yellow"
     cd "$folder" ||  { echo "Error: Failed to change directory to $folder."; exit 1; }
     cecho "Starting the node from $(pwd)" "yellow"
-    #sudo ./unchained.sh worker up -d --force-recreate &> /dev/null
 else
     cecho "Unable to detect working directory of unchained node" "red"
     exit 1
@@ -544,10 +545,11 @@ do
             cd unchained-v"$latest"-docker
 
             cecho "Removing old unchained container..." "yellow"
-            sudo docker rm --force unchained_worker 1> /dev/null
+            sudo docker rm --force $CONTAINER_NAME 1> /dev/null
             
             #importing old keys
-            if [[ ! -z $folder ]]; then
+            if [[ ! -z $folder ]] && [[ -d $folder/conf ]]; then
+                old_directory=$folder
                 cecho "Importing old conf and secrets files and starting the node..." "yellow"
                 sudo cp -r "$old_directory"/conf .
 
@@ -558,7 +560,8 @@ do
             fi
             #Starting the node
             cecho "Starting the node from ${PWD}..."
-            sudo ./unchained.sh worker up -d --force-recreate 1> /dev/null
+            sudo sed -iBACKUP 's/kenshitech/timeleaplabs/g' compose.yaml
+            sudo ./unchained.sh worker up -d --force-recreate &> /dev/null
             ((fix_node_escalation++))
             ;;
         4)
