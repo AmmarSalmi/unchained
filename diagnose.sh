@@ -164,7 +164,7 @@ get_current_version()  {
 get_latest_version() {
     if [ -z "$LATEST_RELEASE" ]
     then
-        local latest_version=$(curl -s "https://github.com/KenshiTech/unchained/releases" | grep 'releases/tag/v' | grep -iEv 'alpha|beta|rc'| head -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+        local latest_version=$(curl -s "https://github.com/TimeleapLabs/unchained/releases" | grep 'releases/tag/v' | grep -iEv 'alpha|beta|rc'| head -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
         LATEST_RELEASE="$latest_version"
         echo "$latest_version"
     else
@@ -181,7 +181,7 @@ latest_version="$(get_latest_version)"
 
 #Check the release page if the most recent push is stable or alpha, beta, rc
 is_latest_stable() {
-    releases_url="https://github.com/KenshiTech/unchained/releases"
+    releases_url="https://github.com/TimeleapLabs/unchained/releases"
     release=$(curl -s $releases_url | grep 'releases/tag/v' | head -n 1 | grep -iE 'alpha|beta|rc')
     [ -z "$release" ]
 }
@@ -220,12 +220,12 @@ safe_update() {
         cecho "Latest image is not stable. Attempting to circumvent unstable release..." "yellow"
         #removing the image tagged as latest since it's not the latest stable release
         cecho "Removing latest image from your machine..." "yellow"
-        sudo docker rmi --force ghcr.io/kenshitech/unchained:latest 1> /dev/null
+        sudo docker rmi --force ghcr.io/timeleaplabs/unchained:latest 1> /dev/null
         cecho "Pulling latest stable image..." "yellow"
         latest_stable=$(get_latest_version)
-        sudo docker pull ghcr.io/kenshitech/unchained:v"$latest_stable" >/dev/null
+        sudo docker pull ghcr.io/timeleaplabs/unchained:v"$latest_stable" >/dev/null
         cecho "Tagging image as latest..." "yellow"
-        sudo docker tag ghcr.io/kenshitech/unchained:v"$latest_stable" ghcr.io/kenshitech/unchained:latest >/dev/null
+        sudo docker tag ghcr.io/timeleaplabs/unchained:v"$latest_stable" ghcr.io/timeleaplabs/unchained:latest >/dev/null
         cecho "Removing container..." "yellow"
         sudo docker rm --force unchained_worker >/dev/null
         cecho "Starting up a node with stable release image..." "yellow"
@@ -271,6 +271,8 @@ get_points() {
 is_gaining_points()  {
     #First argument is a public key or defaulting to the current node key
     publicKey="${1:-$PUBKEY}"
+    ## Modifing the output string to fit whether we're checking the current node or top nodes
+    [[ $publicKey == $PUBKEY ]] && \
     cecho "Checking if your node is gaining points. Please be patient. This could take a while..."
     
     #How long it should wait to come to a conclusion about gaining point
@@ -425,7 +427,7 @@ fi
 if [ ! -z "$folder" ]
 then
     cecho "Working directory detected: $folder" "green"
-    cecho "Navigating to directory: $option" "yellow"
+    cecho "Navigating to directory: $folder" "yellow"
     cd "$folder" ||  { echo "Error: Failed to change directory to $folder."; exit 1; }
     cecho "Starting the node from $(pwd)" "yellow"
     #sudo ./unchained.sh worker up -d --force-recreate &> /dev/null
@@ -434,6 +436,8 @@ else
     exit 1
 fi
 
+cecho "Making sure the compose file is not using old image links (kenshitech)..." "yellow"
+sudo sed -iBACKUP 's/kenshitech/timeleaplabs/g' compose.yaml ##&> /dev/null
 
 cecho "Checking if the node is running..." "yellow"
 start_node_escalation=1
@@ -488,7 +492,7 @@ do
             echo "Setting your node name to $new_node_name"
             node_name=$new_node_name
             #make sure wget is on the system
-            sudo wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf.yaml 
+            sudo wget -q https://raw.githubusercontent.com/TimeleapLabs/unchained/master/conf.worker.yaml.template -O conf.yaml 
             sudo sed -i "s/<name>/$new_node_name/g" conf.yaml
             sudo mv conf.yaml conf/conf.worker.yaml
             sudo ./unchained.sh worker restart 2>/dev/null
@@ -501,17 +505,17 @@ do
             ;;
         3)
             cecho "Fixing the error attempt $fix_node_escalation: LAST ATTEMPT: reinstall." "yellow"
-            choice="x"
-            while ! "$choice"
+            while :
             do
                 read -r -p "Would you like to reinstall the node from scratch?(y/n)" choice
                 choice=${choice,,}
                 case $choice in
-                    y)
+                    y|yes)
                         break
                         ;;
-                    n)
+                    n|no)
                         goodbye "failure"
+                        break
                         ;;
                     *)
                         echo "Please type y for yes or n for no."
@@ -523,15 +527,15 @@ do
 
             cecho "Navigating to your home directory..." "yellow"
             cd ~ || { echo "Couldn't get to home directory"; exit 1; }
-            mapfile -t files < <(sudo find . -maxdepth 5 -type d -name "*unchained*" -exec sudo find {} -type d -name "conf" -printf "%h\n" \;)
 
+            ## Making sure unzip is installed
             command -v unzip &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" unzip -y &>/dev/null; }
 
-            #parsing latest release version number from releases page on github
+            ## parsing latest release version number from releases page on github
             latest=$(get_latest_version)
 
             cecho "Downloading docker zip file..." "yellow"
-            sudo wget -q https://github.com/KenshiTech/unchained/releases/download/v"$latest"/unchained-v"$latest"-docker.zip -O unchained-v"$latest"-docker.zip
+            sudo wget -q https://github.com/TimeleapLabs/unchained/releases/download/v"$latest"/unchained-v"$latest"-docker.zip -O unchained-v"$latest"-docker.zip
 
             cecho "Unziping downloaded file..." "yellow"
             sudo unzip unchained-v"$latest"-docker.zip 1> /dev/null || { echo "Couldn't unzip file"; exit 1; }
@@ -543,15 +547,17 @@ do
             sudo docker rm --force unchained_worker 1> /dev/null
             
             #importing old keys
-            old_directory="$folder"
-            cecho "Importing old conf and secrets files and starting the node..." "yellow"
-            sudo cp -r "$old_directory"/conf .
+            if [[ ! -z $folder ]]; then
+                cecho "Importing old conf and secrets files and starting the node..." "yellow"
+                sudo cp -r "$old_directory"/conf .
 
-            #Double check the conf file is fixed
-            sudo wget -q https://raw.githubusercontent.com/KenshiTech/unchained/master/conf.worker.yaml.template -O conf/conf.worker.yaml
-            node_name=$(sudo cat "$old_directory"/conf/conf.worker.yaml | grep name | head -n 1 | awk -F ': ' '{print $2}')
-            sudo sed -i "s/<name>/$node_name/g" conf/conf.worker.yaml
+                #Double check the conf file is fixed
+                sudo wget -q https://raw.githubusercontent.com/TimeleapLabs/unchained/master/conf.worker.yaml.template -O conf/conf.worker.yaml
+                node_name=$(sudo cat "$old_directory"/conf/conf.worker.yaml | grep name | head -n 1 | awk -F ': ' '{print $2}')
+                sudo sed -i "s/<name>/$node_name/g" conf/conf.worker.yaml
+            fi
             #Starting the node
+            cecho "Starting the node from ${PWD}..."
             sudo ./unchained.sh worker up -d --force-recreate 1> /dev/null
             ((fix_node_escalation++))
             ;;
@@ -602,7 +608,7 @@ do
             ;;
         *)
             cecho "All possible fixes have been tried." "red"
-            cecho "Checking if the problem is with the brokers not with your node..." "yellow"
+            cecho "Checking if the problem is with the brokers not with your node. This could take a while..." "yellow"
             if  is_broker_down 
             then
                 cecho  "Brokers are possibly down.The problem is not on your part." "green"
