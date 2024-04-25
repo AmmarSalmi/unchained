@@ -134,17 +134,21 @@ count_lines() {
 
 is_healthy() {
     printf "Checcking node health. Please wait...\n"
+    SLEEP_TIME=3
+    total_sleep=0
     num_lines=$(count_lines)
     num_new_lines=0
-    while (( num_new_lines < 11 ))
+    while (( num_new_lines < 11 )) && (( total_sleep < 180 ))
     do
-        sleep 3
+        sleep $SLEEP_TIME
+        (( total_sleep+=$SLEEP_TIME ))
         new_count=$(count_lines)
         num_new_lines=$(( num_new_lines + new_count - num_lines ))
         num_lines=$new_count
     done
+    (( total_sleep >= 180 )) && cecho "health checking timed out!" "yellow"
     container_logs=$(sudo cat "$(get_logs_path)" | tail -n 11)
-    [[ $(grep -cvE "INF|ERR" <<< "$container_logs") == 0 ]]
+    [[ $(grep -cvE "INF|ERR" <<< "$container_logs") == 0 ]] && (( total_sleep < 179 ))
 }
 #TO-DO this function needs to be able to check WSS protocol 
 check_rpc() {
