@@ -31,6 +31,35 @@ cecho() {
         ;;
     esac
 }
+
+#Importing key from the backed up file
+import_original_key() {
+    ## importing og secret key
+    cecho "importing original secret key" "green"
+    if [ -f secrets.backup ] 
+    then
+        sudo sed -i '/public\|address/d' conf/secrets.worker.yaml 
+        original_key=$(sudo cat secrets.backup | grep secret | awk -F': ' '{print $2}') 
+        current_key=$(sudo cat conf/secrets.worker.yaml | grep secret | awk -F': ' '{print $2}') 
+        if [[ $current_key == $original_key ]]; then
+            cecho "Your node is already using the original key" "green"
+            return 0
+        else 
+            sudo sed -i "s/$current_key/$original_key/g" conf/secrets.worker.yaml 
+            sudo docker restart $CONTAINER_NAME &> /dev/null  
+            ## updating current key
+            current_key=$(sudo cat conf/secrets.worker.yaml | grep secret | awk -F': ' '{print $2}')
+            if [[ $current_key == $original_key ]]; then
+                cecho "Original key imported and node restarted successfully" "green"
+            else
+                cecho "Couldn't import orginal key. Please do it manually. It's stored in file secrets.backup." "yellow"
+            fi
+        fi
+    else
+        cecho "Can't find the backup file for your secret key" "yellow"
+    fi
+}
+ 
 #Goodbye message
 goodbye() {
     local result=$1
@@ -440,6 +469,23 @@ fi
 cecho "Making sure the compose file is not using old image links (kenshitech)..." "yellow"
 sudo sed -iBACKUP 's/kenshitech/timeleaplabs/g' compose.yaml ##&> /dev/null
 
+## backing up secret key
+cecho "Backing up secret key" "yellow"
+if [[ -f "conf/secrets.worker.yaml" ]] 
+then
+    sudo cp conf/secrets.worker.yaml  secrets.backup
+    if [[ -f secrets.backup ]] &&  grep -q secret secrets.backup ; then
+        address=$(sudo cat secrets.backup | grep address | awk -F': ' '{print $2}')
+        cecho "Secret key backed up successfully for the address: $address." "green"
+    else
+        cecho "Secret key couldn't be backed up. Please do it manually before updating or using this script again."
+        exit 1
+    fi
+else
+    cecho "Can't back up secret key. Back it up manually first then rerun this script." "red";
+    exit 1;
+fi
+
 cecho "Checking if the node is running..." "yellow"
 start_node_escalation=1
 response=""
@@ -583,6 +629,7 @@ do
     esac
 done
 
+#Current node public key constant
 PUBKEY="$(get_publickey)"
 fix_node_escalation=1
 response=""
@@ -625,9 +672,9 @@ do
     esac
 done
 
-unchained_address=$(sudo cat conf/secrets.worker.yaml | grep address | head -n 1 | awk -F ': ' '{print $2}')
-#Current node public key constant
+import_original_key
 
+unchained_address=$(sudo cat conf/secrets.worker.yaml | grep 'address:' | awk -F ': ' '{print $2}')
 #Getting the node score on the leadboard
 current_score="$(get_points "$PUBKEY" )"
 echo -n "Your node name is "
