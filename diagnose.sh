@@ -482,8 +482,16 @@ then
         exit 1
     fi
 else
-    cecho "Can't back up secret key. Back it up manually first then rerun this script." "red";
-    exit 1;
+    cecho "Can't back up secret key. Back it up manually first." "red";
+    while :
+    do
+        read -p "Do you want to continue anyway?(y/n)" cont_answer
+        case $cont_answer in
+            y|Y) break ;;
+            n|N) exit 1 ;;
+            *) echo "Invalid answer"
+        esac
+    done
 fi
 
 cecho "Checking if the node is running..." "yellow"
