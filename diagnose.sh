@@ -3,24 +3,28 @@
 #: Author: Ammar Salmi
 #: Version: 1.3.5
 #: Description: Tool to fix, update, and reinstall unchained node run on docker in linux systems
-#Constants
-#the docker image name for unchained worker
+
+
+## Constants
+## the docker image name for unchained worker
 CONTAINER_NAME="unchained_worker"
+
+## File paths
 CONF_FILE_PATH="conf/conf.worker.yaml"
 SECRETS_FILE_PATH="conf/secrets.worker.yaml"
-#default value for timeout when monitoring points increase on leadboard
+## Default value for timeout when monitoring points increase on leadboard
 POINTS_TIMEOUT=39
-#A variable so latest stable  release is only fetched once from the internet
+## A variable so latest stable  release is only fetched once from the internet
 LATEST_RELEASE=""
-#Welcome message and explanation
+## Welcome message and explanation
 echo "#################################################################################"
 echo "# Unchained Ironsmith                                                           #"
 echo "# A community-made tool to help diagnose and fix unchained node problem.        #"
 echo "# v1.3.5 Supports only docker nodes. Tested only on ubuntu, debian, and centos  #"
 echo "#################################################################################"
 
-#Declaring functions here
-#Colored output function
+## Declaring functions here
+## Colored output function
 cecho() {
     case $2  in
     'green')
@@ -38,13 +42,12 @@ cecho() {
     esac
 }
 
-#Importing key from the backed up file
+## Importing key from the backed up file
 import_original_key() {
-    ## importing og secret key
+    ## Importing og secret key
     cecho "importing original secret key" "green"
     if [ -f secrets.backup ] 
     then
-        sudo sed -i '/public\|address/d' $SECRETS_FILE_PATH
         original_key=$(sudo awk -F': ' ' /secret/ {print $2}' secrets.backup) 
         current_key=$(sudo awk -F': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) 
         if [[ $current_key == $original_key ]]; then
@@ -52,22 +55,23 @@ import_original_key() {
             return 0
         else 
 
-            sudo sed -i "s/$current_key/$original_key/" $SECRETS_FILE_PATH
-            sudo docker restart $CONTAINER_NAME &> /dev/null  
-            ## updating current key
-            current_key=$(sudo awk -F': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) 
-            if [[ $current_key == $original_key ]]; then
-                cecho "Original key imported and node restarted successfully" "green"
-            else
-                cecho "Couldn't import orginal key. Please do it manually. It's stored in file secrets.backup." "yellow"
-            fi
+        sudo sed -i "s/$current_key/$original_key/" $SECRETS_FILE_PATH
+        sudo sed -i "/address\|public/d" $SECRETS_FILE_PATH
+        PUBKEY=$(get_publickey)
+        ## updating current key
+        current_key=$(sudo awk -F': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) 
+        if [[ $current_key == $original_key ]]; then
+            cecho "Original key imported and node restarted successfully" "green"
+        else
+            cecho "Couldn't import orginal key. Please do it manually. It's stored in file secrets.backup." "yellow"
+        fi
         fi
     else
         cecho "Can't find the backup file for your secret key" "yellow"
     fi
 }
  
-#Goodbye message
+## Goodbye message
 goodbye() {
     local result=$1
     case "$result" in
@@ -89,10 +93,10 @@ goodbye() {
     echo "For further help, please visit us at https://t.me/KenshiTech. Find us in Unchained channel."
     exit 0
 }
-#Using inspect to check docker container various states
+## Using inspect to check docker container various states
 function check_container_state()
 {
-    #lowercase the argument
+    ## Lowercase the argument
     state_label=${1,,}
     case $state_label in
         run|running)
@@ -101,7 +105,7 @@ function check_container_state()
             false
             ;;
         rest|restarting)
-            #Docker often needs time to set .Restarting to true when node is restarting
+            ## Docker often needs time to set .Restarting to true when node is restarting
             container_state=$(sudo docker inspect --format='{{.State.Restarting}}' "$CONTAINER_NAME") &> /dev/null && \
             [ "$container_state" == "true" ] || \
             false
@@ -112,7 +116,7 @@ function check_container_state()
             ;;
     esac
 }
-#Grab secret key from secrets file and obscure most of it
+## Grab secret key from secrets file and obscure most of it
 show_secretkey() {
     [ -f $SECRETS_FILE_PATH ] && secretkey=$(sudo awk -F ': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) || echo "Can't find secrets.worker.yaml"
     first4chars=${secretkey: 0:4}
@@ -120,12 +124,12 @@ show_secretkey() {
     echo "$first4chars**********$last4chars"
 }
 
-# A function to check if container is running
+## A function to check if container is running
 is_running() {
     check_container_state "running"
 }
 
-# A function to check if container is restarting
+## A function to check if container is restarting
 is_restarting() {
     check_container_state "restarting"
 }
@@ -154,19 +158,18 @@ is_healthy() {
         num_lines=$new_count
     done
     (( total_sleep >= 180 )) && cecho "health checking timed out!" "yellow"
-    container_logs=$(sudo cat "$(get_logs_path)" | tail -n 11)
+    container_logs=$(sudo tail -n 11 "$(get_logs_path)")
     [[ $(grep -cvE "INF|ERR" <<< "$container_logs") == 0 ]] && (( total_sleep < 179 ))
 }
-#TO-DO this function needs to be able to check WSS protocol 
-check_rpc() {
-# Ethereum RPC endpoint URL
-RPC_URL="https://$1"
 
-# JSON-RPC request data
+## TO-DO this function needs to be able to check WSS protocol 
+check_rpc() {
+
+## JSON-RPC request data
 REQUEST='{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 
-# Send the JSON-RPC request using curl
-response=$(curl -s -X POST -H "Content-Type: application/json" --data "$REQUEST" "$RPC_URL")
+## Send the JSON-RPC request using curl
+response=$(curl -s -X POST -H "Content-Type: application/json" --data "$REQUEST" "$1")
 
 [[ "$response" =~ "result" ]]
 }
@@ -187,15 +190,17 @@ get_RPCs_line_num() {
 ## This function was created to remove bad rpcs
 remove_bad_rpcs() {
 
-#parsing the conf file to get all links except for broker
-rpcs_links=$(sudo awk -F '://' ' /:\/\// && !/broker/ {print $2}' $CONF_FILE_PATH)
+## Parsing the conf file to get all links except for broker
+rpcs_links=$(sudo awk -F '- ' ' /:\/\// && !/broker/ {print $2}' $CONF_FILE_PATH)
 
-# Loop through the list parsed from conf.worker.yaml
+## Loop through the list parsed from conf.worker.yaml
 bad_rpcs=0
 while IFS= read -r link; do
     if ! check_rpc "$link"; then
         # Remove the line containing the link from conf.yaml
-        sudo sed -i "/$link/d" $CONF_FILE_PATH
+        short_link=${link#*//}
+        short_link=${short_link%%/*}
+        sudo sed -i "/${short_link}/d" $CONF_FILE_PATH
         echo "Removing bad rpc: $link"
         ((bad_rpcs++))
     else
@@ -205,16 +210,16 @@ done <<< $rpcs_links
 [[ $bad_rpcs == ${#rpcs_links[@]} ]]
 }
 
-#Check the node logs for the currently used unchained version
+## Check the node logs for the currently used unchained version
 get_current_version()  {
-    #check current version
-    version=$(sudo cat "$(get_logs_path)" | grep Version | tail -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 )
+    ## Check current version
+    version=$(sudo grep Version "$(get_logs_path)" | tail -n 1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 )
     echo "$version"
 }
 
-#Get the latest stable release from release page on github
-#TO-DO It's hard-coded and might need more finess to able to adapt in possible pages in the web page
-#TO-DO check internet connectivity function is needed
+## Get the latest stable release from release page on github
+## TO-DO It's hard-coded and might need more finess to able to adapt in possible pages in the web page
+## TO-DO check internet connectivity function is needed
 get_latest_version() {
     if [ -z "$LATEST_RELEASE" ]
     then
@@ -226,21 +231,21 @@ get_latest_version() {
     fi
 }
 
-#Compare the current version of the node to the latest stable release
+## Compare the current version of the node to the latest stable release
 is_uptodate() {
 current_version="$(get_current_version)"
 latest_version="$(get_latest_version)"
 [[ "$latest_version" == "$current_version" ]]
 }
 
-#Check the release page if the most recent push is stable or alpha, beta, rc
+## Check the release page if the most recent push is stable or alpha, beta, rc
 is_latest_stable() {
     releases_url="https://github.com/TimeleapLabs/unchained/releases"
     release=$(curl -s $releases_url | grep 'releases/tag/v' | head -n 1 | grep -iE 'alpha|beta|rc')
     [ -z "$release" ]
 }
 
-#Simple pull and "up -d" sequence
+## Simple pull and "up -d" sequence
 pull_and_recreate() {
     cecho "Pulling latest image..." "yellow"
     update_response=$({ sudo ./unchained.sh worker pull; } 2>&1)
@@ -251,11 +256,11 @@ pull_and_recreate() {
     echo "update response: $update_response || remove container response:$remove_container_response || recreate response: $starting_response" 
 }
 
-#Trying to update the node without catching an alph/beta/rc release by mistake
+## Trying to update the node without catching an alph/beta/rc release by mistake
 safe_update() {
     if is_latest_stable
     then
-        #updating the node with regular "pull" and "up -d"
+        ## Updating the node with regular "pull" and "up -d"
         cecho "Attempting to update with regular pull since latest image is a stable release" "yellow"
         response=$(pull_and_recreate)
         sleep 2
@@ -270,9 +275,9 @@ safe_update() {
             return 1
         fi
     else
-        #dodging alpha release
+        ## Dodging alpha release
         cecho "Latest image is not stable. Attempting to circumvent unstable release..." "yellow"
-        #removing the image tagged as latest since it's not the latest stable release
+        ## removing the image tagged as latest since it's not the latest stable release
         cecho "Removing latest image from your machine..." "yellow"
         sudo docker rmi --force ghcr.io/timeleaplabs/unchained:latest 1> /dev/null
         cecho "Pulling latest stable image..." "yellow"
@@ -297,22 +302,30 @@ safe_update() {
 
 }
 
-#Get the current node public key
+## Get the current node public key
 get_publickey() {
-pubk=$(sudo awk -F ': ' ' /public/ {print $2}' $SECRETS_FILE_PATH)
-echo "$pubk"
+    attempts=0
+    while ! grep -q public $SECRETS_FILE_PATH && (( attempts < 4))
+    do
+        cecho "Public key wasn't generated. Restarting the node to create it" "yellow"
+        sudo sudo docker stop $CONTAINER_NAME &> /dev/null
+        sudo sudo docker start $CONTAINER_NAME &> /dev/null
+        ((attempts++))
+    done
+    pubk=$(sudo awk -F ': ' ' /public/ {print $2}' $SECRETS_FILE_PATH)
+    echo $pubk
 }
 
-#Get the current node unchained address
+## Get the current node unchained address
 get_address() {
     secrets_file=${1:-$SECRETS_FILE_PATH}
     address=$( sudo awk -F': ' ' /address/ {print $2}' "$secrets_file" )
     echo "$address"
 }
 
-#Use API to fetch the node points on the scoreboard
+## Use API to fetch the node points on the scoreboard
 get_points() {
-    hex_key="${1:-$PUBKEY}"
+    hex_key=${1:-$PUBKEY}
     
     # Construct the GraphQL query with the hex key variable
     query="{ \"query\": \"query Signers { signers (where: {key: \\\"$hex_key\\\"}) { edges { node { name points } } } }\" }"
@@ -327,24 +340,23 @@ get_points() {
     points=$(echo "$json_data" | jq -r '.data.signers.edges[0].node.points')
 
     # Print the extracted values
-    echo "$points"
+    echo $points
 }
 
 
-## monitor node for score increase
-
+## Monitor node for score increase
 is_gaining_points()  {
-    #First argument is a public key or defaulting to the current node key
-    publicKey="${1:-$PUBKEY}"
+    ## First argument is a public key or defaulting to the current node key
+    local publicKey="${1:-$PUBKEY}"
     ## Modifing the output string to fit whether we're checking the current node or top nodes
     [[ $publicKey == $PUBKEY ]] && \
-    cecho "Checking if your node is gaining points. Please be patient. This could take a while..."
+    cecho "Checking if your node is gaining points. Please be patient. This could take a while..." "yellow"
     
-    #How long it should wait to come to a conclusion about gaining point
+    ## How long it should wait to come to a conclusion about gaining point
     local timeout=${2:-$POINTS_TIMEOUT}
     
-    #Getting the score every 3 seconds till timemout is reached or score increase detected    
-    current_score="$(get_points "$publicKey")";
+    ## Getting the score every 3 seconds till timemout is reached or score increase detected    
+    current_score=$(get_points $publicKey);
     points_0=$((current_score));
     updated_points="$current_score";
     points_1=$((updated_points));
@@ -353,7 +365,7 @@ is_gaining_points()  {
     while (( points_1 == points_0 )) && (( waiting_time < timeout ));
     do
         sleep "$TIME_INCREMENT";
-        updated_points="$(get_points "$publicKey")";
+        updated_points=$(get_points $publicKey);
         points_1=$((updated_points));
         ((waiting_time += $((TIME_INCREMENT)) ));
     done
@@ -361,14 +373,14 @@ is_gaining_points()  {
     [[ $(($gained_points)) > 0 ]]
     }
 
-#Checking if all nodes are not getting points for some global error
+## Checking if all nodes are not getting points for some global error
 is_broker_down() {
     public_keys=(
-    #ammarubuntu node
+    ## ammarubuntu node
     "8cafe3f3630e8a49bfc6fae1a3d4bd5db38458e34b781886f75cb8f25296416763a9e9feb1ef7da041238edcdbdaa63412445eb9030d2c9f58bbda0f7397a7cfeaf1fdf671de8dd7c42ca1010bf4d452d0d4889cb94439d004dd76a148d9a60f"
-    #ammardebian node
+    ## ammardebian node
     "96279fd86b29c018126f8be1c072095cbc2fc35f3933da38ce12e21c56e2e217f4735c4bf170675c0dd10b844e1b8ff6185b932214b266d3c5a6fb6901016db1a67d34606e6da75f6008126004279637f499c27cfe2bd691b12bf16c9fe8f714"
-    #jay's node
+    ## jay's node
     "80f0588b01cf7e2b1dae235c5a625ecf9d1c2b3d32eafe729fc9d551f1ef151a4fb30697344b05986ac565a7a29863b701091994bd3d18a43ad7a055bac555d7194d7556b90e278d5d624a801ee73980ac2131523bdc01894373eccba88af925"
     )
     tested_nodes=0
@@ -380,12 +392,12 @@ is_broker_down() {
     [ "$tested_nodes" -eq "${#public_keys[@]}" ]
 }
 ##################################
-#THE END OF FUNCTION DECLARATIONS#
+## THE END OF FUNCTION DECLARATIONS#
 ##################################
 
-#Detect linux dist and set the appropriate package manager
-#Some commands like wget, jq may not be installed by default on some machines
-#They are needed for this script to run properly
+## Detect linux dist and set the appropriate package manager
+## Some commands like wget, jq may not be installed by default on some machines
+## They are needed for this script to run properly
 INSTALL_COMMAND="install"
 if command -v apt &>/dev/null; then
     PKG_MNGR="apt"
@@ -410,13 +422,13 @@ fi
 
 echo "Package manager set to $PKG_MNGR." 
 
-#Installing necessary tools
+## Installing necessary tools
 cecho "Installing necessary commands for the script: wget, curl, jq " "yellow"
 command -v jq &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" jq -y &>/dev/null; }
 command -v curl &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" curl -y &>/dev/null; }
 command -v wget &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" wget -y &>/dev/null; }
 
-#Checking if docker version 2 is installed
+## Checking if docker version 2 is installed
 if ! command -v docker &>/dev/null; then
   cecho "Error: docker could not be found on your system!" "red"
   echo "You can refer to this guide to install docker V2"
@@ -449,7 +461,7 @@ else
 fi
 
 
-#Detecting the working directory of unchained node
+## Detecting the working directory of unchained node
 cecho "Attempting to auto-detect working directory of your node..." "yellow"
 folder=""
 if ! sudo docker inspect "$CONTAINER_NAME" &> /dev/null
@@ -457,7 +469,7 @@ then
     cecho "Error: $CONTAINER_NAME container doesn't exist" "red"
     cecho "Attempting to locate unchained folder" "yellow"
     
-    #navigating to home directory
+    ## navigating to home directory
     cd ~ || { echo "Error: Failed to change directory to the home directory."; exit 1; }
     
     # Store search results in an array
@@ -485,7 +497,7 @@ else
     folder=$( sudo docker inspect --format='{{json .Config.Labels}}' "$CONTAINER_NAME" | jq -r '.["com.docker.compose.project.working_dir"]' )
 fi
 
-# Change directory to the folder where the Docker container was created
+## Change directory to the folder where the Docker container was created
 if [ ! -z "$folder" ]
 then
     cecho "Working directory detected: $folder" "green"
@@ -498,9 +510,9 @@ else
 fi
 
 cecho "Making sure the compose file is not using old image links (kenshitech)..." "yellow"
-sudo sed -iBACKUP 's/kenshitech/timeleaplabs/g' compose.yaml ##&> /dev/null
+sudo sed -iBACKUP 's/kenshitech/timeleaplabs/g' compose.yaml 
 
-## backing up secret key
+## Backing up secret key
 cecho "Backing up secret key" "yellow"
 if [[ -f "$SECRETS_FILE_PATH" ]] 
 then
@@ -560,9 +572,9 @@ else
     cecho "Node started successfully" "green"
 fi
 
-#Check restarting status to determin if there is a problem with the node
+## Check restarting status to determin if there is a problem with the node
 
-#Getting node name
+## Getting node name
 node_name=$(sudo awk -F ': ' ' /name/ && !found {print $2; found=1}' $CONF_FILE_PATH)
 fix_node_escalation=1
 response=""
@@ -571,17 +583,17 @@ do
     case $fix_node_escalation in
         1)
             cecho "Fixing the error attempt $fix_node_escalation: updating conf file." "yellow"
-            #DONE: detecting generic node names with regex
+            ## DONE: detecting generic node names with regex
             if [ -z "$node_name" ] || [ "$node_name" == '<name>' ] || [[ "$node_name" =~ [a-zA-Z]+-[a-zA-Z]+-[a-zA-Z]+ ]]
             then
                     echo "Generic or null name detected: $node_name."
                     read -r -p "Please, enter your perfered node name or press ENTER to keep the same name: " answer
             fi
-            #Increasing timeout if name changed since detecting points take longer if name is changed
+            ## Increasing timeout if name changed since detecting points take longer if name is changed
             [ -z "$answer" ] && new_node_name="$node_name" || { new_node_name="$answer"; POINTS_TIMEOUT=60; }
             echo "Setting your node name to $new_node_name"
             node_name=$new_node_name
-            #make sure wget is on the system
+            ## Make sure wget is on the system
             sudo wget -q https://raw.githubusercontent.com/TimeleapLabs/unchained/master/conf.worker.yaml.template -O conf.yaml 
             sudo sed -i "s/<name>/$new_node_name/g" conf.yaml
             sudo mv conf.yaml $CONF_FILE_PATH
@@ -612,7 +624,7 @@ do
                         ;;
                 esac
             done
-            #Reinstalling from scratch as last resort to fix node
+            ## Reinstalling from scratch as last resort to fix node
             cecho "Reinstalling your node..." "yellow"
 
             cecho "Navigating to your home directory..." "yellow"
@@ -621,7 +633,7 @@ do
             ## Making sure unzip is installed
             command -v unzip &>/dev/null || { sudo "$PKG_MNGR" "$INSTALL_COMMAND" unzip -y &>/dev/null; }
 
-            ## parsing latest release version number from releases page on github
+            ## Parsing latest release version number from releases page on github
             latest=$(get_latest_version)
 
             cecho "Downloading docker zip file..." "yellow"
@@ -636,7 +648,7 @@ do
             cecho "Removing old unchained container..." "yellow"
             sudo docker rm --force $CONTAINER_NAME 1> /dev/null
             
-            #importing old keys
+            ## Importing old keys
             if [[ ! -z $folder ]] && [[ -d $folder/conf ]]; then
                 old_directory=$folder
                 cecho "Importing old conf and secrets files and starting the node..." "yellow"
@@ -649,7 +661,7 @@ do
                 node_name=$( sudo awk -F ': ' ' /name/ && !found { print $2; found=1 }' "$old_directory"/$CONF_FILE_PATH )
                 sudo sed -i "s/<name>/$node_name/g" $CONF_FILE_PATH
             fi
-            #Starting the node
+            ## Starting the node
             cecho "Starting the node from ${PWD}..."
             sudo sed -iBACKUP 's/kenshitech/timeleaplabs/g' compose.yaml
             sudo ./unchained.sh worker up -d --force-recreate &> /dev/null
@@ -675,8 +687,8 @@ do
     esac
 done
 
-#Current node public key constant
-PUBKEY="$(get_publickey)"
+## Current node public key constant
+PUBKEY=$(get_publickey)
 fix_node_escalation=1
 response=""
 while ! is_gaining_points 
@@ -685,9 +697,9 @@ do
         1)
             cecho "Your node is not gaining points." "red"
             cecho "Checking rpc problem." "yellow"
-            if sudo cat "$(get_logs_path)" | tail -n 10 | grep ERR | grep -qi rpc 
+            if sudo tail -n 10 "$(get_logs_path)" | grep ERR | grep -qi rpc 
             then
-                #TO-DO the line number of rpcs is still hardcoded
+                ## TO-DO the line number of rpcs is still hardcoded
                 if remove_bad_rpcs; then  
                 cecho "Possible bad rpc in conf. Adding merkle..." "yellow"
                 RPCs_line=$(get_RPCs_line_num)
@@ -722,22 +734,20 @@ done
 import_original_key
 
 ## Updating public key after importing the original key
-PUBKEY="$(get_publickey)"
+PUBKEY=$(get_publickey)
 
 unchained_address=$(get_address)
 
-#Getting the node score on the leadboard
-current_score="$(get_points "$PUBKEY" )"
+## Getting the node score on the leadboard
+current_score=$(get_points)
 echo -n "Your node name is "
 cecho "${node_name}." "green"
 
-echo -n "Your address is "
-cecho "${unchained_address}." "green"
+[[ ! -z $unchained_address ]] && echo -n "Your address is " && cecho "${unchained_address}." "green"
 if [ "$current_score" == "null" ] || [[ $(($current_score)) < 100 ]]
 then
     cecho "WARNING: Your node is possibly using a newly generated secret key" "yellow"
     cecho "Please, make sure to put your old secret key in secrets.worker.yaml file."
-    echo -n "Your current secret key is "
     cecho "$(show_secretkey)" "green"
 else
     echo -n "Your current score on the leadboard is "
