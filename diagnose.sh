@@ -189,25 +189,25 @@ get_RPCs_line_num() {
 ## If we add a working rpc but some of them are not responding, the node will still give rpc error
 ## This function was created to remove bad rpcs
 remove_bad_rpcs() {
+    ## Parsing the conf file to get all links except for broker
+    rpcs_links=$(sudo awk -F '- ' ' /:\/\// && !/broker/ && !/sepolia/ {print $2}' $CONF_FILE_PATH)
 
-## Parsing the conf file to get all links except for broker
-rpcs_links=$(sudo awk -F '- ' ' /:\/\// && !/broker/ {print $2}' $CONF_FILE_PATH)
-
-## Loop through the list parsed from conf.worker.yaml
-bad_rpcs=0
-while IFS= read -r link; do
-    if ! check_rpc "$link"; then
-        # Remove the line containing the link from conf.yaml
-        short_link=${link#*//}
-        short_link=${short_link%%/*}
-        sudo sed -i "/${short_link}/d" $CONF_FILE_PATH
-        echo "Removing bad rpc: $link"
-        ((bad_rpcs++))
-    else
-        echo "$link seems good"
-    fi
-done <<< $rpcs_links
-[[ $bad_rpcs == ${#rpcs_links[@]} ]]
+    ## Loop through the list parsed from conf.worker.yaml
+    num_links_left=0
+    while IFS= read -r link; do
+        ((num_links_left++))
+        if ! check_rpc "$link"; then
+            # Remove the line containing the link from conf.yaml
+            short_link=${link#*//}
+            short_link=${short_link%%/*}
+            sudo sed -i "/${short_link}/d" $CONF_FILE_PATH
+            echo "Removing bad rpc: $link"
+            ((num_links_left--))
+        else
+            echo "$link seems good"
+        fi
+    done <<< $rpcs_links
+    ! (( num_links_left ))
 }
 
 ## Check the node logs for the currently used unchained version
