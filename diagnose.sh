@@ -1,7 +1,13 @@
 #!/bin/bash
+#: Date: 4/27/2024
+#: Author: Ammar Salmi
+#: Version: 1.3.5
+#: Description: Tool to fix, update, and reinstall unchained node run on docker in linux systems
 #Constants
 #the docker image name for unchained worker
 CONTAINER_NAME="unchained_worker"
+CONF_FILE_PATH="conf/conf.worker.yaml"
+SECRETS_FILE_PATH="conf/secrets.worker.yaml"
 #default value for timeout when monitoring points increase on leadboard
 POINTS_TIMEOUT=39
 #A variable so latest stable  release is only fetched once from the internet
@@ -10,7 +16,7 @@ LATEST_RELEASE=""
 echo "#################################################################################"
 echo "# Unchained Ironsmith                                                           #"
 echo "# A community-made tool to help diagnose and fix unchained node problem.        #"
-echo "# v1.3 Supports only docker nodes and tested only on ubuntu, debian, and centos #"
+echo "# v1.3.5 Supports only docker nodes. Tested only on ubuntu, debian, and centos  #"
 echo "#################################################################################"
 
 #Declaring functions here
@@ -38,17 +44,18 @@ import_original_key() {
     cecho "importing original secret key" "green"
     if [ -f secrets.backup ] 
     then
-        sudo sed -i '/public\|address/d' conf/secrets.worker.yaml 
-        original_key=$(sudo cat secrets.backup | grep secret | awk -F': ' '{print $2}') 
-        current_key=$(sudo cat conf/secrets.worker.yaml | grep secret | awk -F': ' '{print $2}') 
+        sudo sed -i '/public\|address/d' $SECRETS_FILE_PATH
+        original_key=$(sudo awk -F': ' ' /secret/ {print $2}' secrets.backup) 
+        current_key=$(sudo awk -F': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) 
         if [[ $current_key == $original_key ]]; then
             cecho "Your node is already using the original key" "green"
             return 0
         else 
-            sudo sed -i "s/$current_key/$original_key/g" conf/secrets.worker.yaml 
+
+            sudo sed -i "s/$current_key/$original_key/" $SECRETS_FILE_PATH
             sudo docker restart $CONTAINER_NAME &> /dev/null  
             ## updating current key
-            current_key=$(sudo cat conf/secrets.worker.yaml | grep secret | awk -F': ' '{print $2}')
+            current_key=$(sudo awk -F': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) 
             if [[ $current_key == $original_key ]]; then
                 cecho "Original key imported and node restarted successfully" "green"
             else
@@ -107,7 +114,7 @@ function check_container_state()
 }
 #Grab secret key from secrets file and obscure most of it
 show_secretkey() {
-    [ -f conf/secrets.worker.yaml ] && secretkey=$(sudo cat conf/secrets.worker.yaml | grep secret | awk -F ': ' '{print $2}') || echo "Can't find secrets.worker.yaml"
+    [ -f $SECRETS_FILE_PATH ] && secretkey=$(sudo awk -F ': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) || echo "Can't find secrets.worker.yaml"
     first4chars=${secretkey: 0:4}
     last4chars=${secretkey: -4}
     echo "$first4chars**********$last4chars"
@@ -163,27 +170,39 @@ response=$(curl -s -X POST -H "Content-Type: application/json" --data "$REQUEST"
 
 [[ "$response" =~ "result" ]]
 }
+## get the rpcs position in conf file
+get_RPCs_line_num() {
+    line_num=0
+    while IFS= read line 
+    do
+    ((line_num++))
+    case ${line,,} in
+        rpc:*) break ;;
+    esac
+    done < $CONF_FILE_PATH
+    echo $((line_num + 2))
+}
 
-#If we add a working rpc but some of them are not responding, the node will still give rpc error
-#This function was created to remove bad rpcs
+## If we add a working rpc but some of them are not responding, the node will still give rpc error
+## This function was created to remove bad rpcs
 remove_bad_rpcs() {
 
 #parsing the conf file to get all links except for broker
-rpcs_links=$(sudo cat conf/conf.worker.yaml | grep :// | grep -iv broker | awk -F '://' '{print $2}')
+rpcs_links=$(sudo awk -F '://' ' /:\/\// && !/broker/ {print $2}' $CONF_FILE_PATH)
 
 # Loop through the list parsed from conf.worker.yaml
 bad_rpcs=0
 while IFS= read -r link; do
     if ! check_rpc "$link"; then
         # Remove the line containing the link from conf.yaml
-        sudo sed -i "/$link/d" conf/conf.worker.yaml
+        sudo sed -i "/$link/d" $CONF_FILE_PATH
         echo "Removing bad rpc: $link"
         ((bad_rpcs++))
     else
         echo "$link seems good"
     fi
 done <<< $rpcs_links
-[[ $bad_rpcs -gt 0 ]]
+[[ $bad_rpcs == ${#rpcs_links[@]} ]]
 }
 
 #Check the node logs for the currently used unchained version
@@ -280,8 +299,15 @@ safe_update() {
 
 #Get the current node public key
 get_publickey() {
-pubk=$(sudo cat conf/secrets.worker.yaml | grep public | awk -F ': ' '{print $2}')
+pubk=$(sudo awk -F ': ' ' /public/ {print $2}' $SECRETS_FILE_PATH)
 echo "$pubk"
+}
+
+#Get the current node unchained address
+get_address() {
+    secrets_file=${1:-$SECRETS_FILE_PATH}
+    address=$( sudo awk -F': ' ' /address/ {print $2}' "$secrets_file" )
+    echo "$address"
 }
 
 #Use API to fetch the node points on the scoreboard
@@ -303,6 +329,10 @@ get_points() {
     # Print the extracted values
     echo "$points"
 }
+
+
+## monitor node for score increase
+
 is_gaining_points()  {
     #First argument is a public key or defaulting to the current node key
     publicKey="${1:-$PUBKEY}"
@@ -452,10 +482,7 @@ then
 else
     # Inspecting unchained container to grab the working directory
     # Get the Docker inspect output
-    docker_inspect=$(sudo docker inspect --format='{{json .Config.Labels}}' "$CONTAINER_NAME")
-    # Extract the folder path using grep and awk
-    folder=$(echo "$docker_inspect" | grep -o '"com.docker.compose.project.working_dir":"[^"]*' | awk -F ':"' '{print $2}')
-
+    folder=$( sudo docker inspect --format='{{json .Config.Labels}}' "$CONTAINER_NAME" | jq -r '.["com.docker.compose.project.working_dir"]' )
 fi
 
 # Change directory to the folder where the Docker container was created
@@ -475,11 +502,15 @@ sudo sed -iBACKUP 's/kenshitech/timeleaplabs/g' compose.yaml ##&> /dev/null
 
 ## backing up secret key
 cecho "Backing up secret key" "yellow"
-if [[ -f "conf/secrets.worker.yaml" ]] 
+if [[ -f "$SECRETS_FILE_PATH" ]] 
 then
-    sudo cp conf/secrets.worker.yaml  secrets.backup
+    sudo cp $SECRETS_FILE_PATH  secrets.backup
     if [[ -f secrets.backup ]] &&  grep -q secret secrets.backup ; then
-        address=$(sudo cat secrets.backup | grep address | awk -F': ' '{print $2}')
+        address=$(get_address secrets.backup)
+        
+        ## Puttin the apropriate labels in secrets to avoid creating new key pair
+        sudo sed -i 's/k/K/g' $SECRETS_FILE_PATH
+
         cecho "Secret key backed up successfully for the address: $address." "green"
     else
         cecho "Secret key couldn't be backed up. Please do it manually before updating or using this script again."
@@ -532,7 +563,7 @@ fi
 #Check restarting status to determin if there is a problem with the node
 
 #Getting node name
-node_name=$(sudo cat conf/conf.worker.yaml | grep name | head -n 1 | awk -F ': ' '{print $2}')
+node_name=$(sudo awk -F ': ' ' /name/ && !found {print $2; found=1}' $CONF_FILE_PATH)
 fix_node_escalation=1
 response=""
 while ! is_healthy 
@@ -553,7 +584,7 @@ do
             #make sure wget is on the system
             sudo wget -q https://raw.githubusercontent.com/TimeleapLabs/unchained/master/conf.worker.yaml.template -O conf.yaml 
             sudo sed -i "s/<name>/$new_node_name/g" conf.yaml
-            sudo mv conf.yaml conf/conf.worker.yaml
+            sudo mv conf.yaml $CONF_FILE_PATH
             sudo ./unchained.sh worker restart 2>/dev/null
             ((fix_node_escalation++))
             ;;
@@ -611,10 +642,12 @@ do
                 cecho "Importing old conf and secrets files and starting the node..." "yellow"
                 sudo cp -r "$old_directory"/conf .
 
-                #Double check the conf file is fixed
-                sudo wget -q https://raw.githubusercontent.com/TimeleapLabs/unchained/master/conf.worker.yaml.template -O conf/conf.worker.yaml
-                node_name=$(sudo cat "$old_directory"/conf/conf.worker.yaml | grep name | head -n 1 | awk -F ': ' '{print $2}')
-                sudo sed -i "s/<name>/$node_name/g" conf/conf.worker.yaml
+                ## Double check the conf file is fixed
+                sudo wget -q https://raw.githubusercontent.com/TimeleapLabs/unchained/master/conf.worker.yaml.template -O $CONF_FILE_PATH
+                
+                ## Importing old name
+                node_name=$( sudo awk -F ': ' ' /name/ && !found { print $2; found=1 }' "$old_directory"/$CONF_FILE_PATH )
+                sudo sed -i "s/<name>/$node_name/g" $CONF_FILE_PATH
             fi
             #Starting the node
             cecho "Starting the node from ${PWD}..."
@@ -625,10 +658,11 @@ do
         4)
             if remove_bad_rpcs; then  
             cecho "Possible bad rpc in conf. Adding merkle..." "yellow"
-            sudo head -n 8 conf/conf.worker.yaml > temp.yaml  
+            RPCs_line=$(get_RPCs_line_num)
+            sudo head -n $RPCs_line $CONF_FILE_PATH > temp.yaml  
             echo "    - https://eth.merkle.io" >> temp.yaml 
-            sudo tail -n +9 conf/conf.worker.yaml >> temp.yaml 
-            sudo mv temp.yaml conf/conf.worker.yaml
+            sudo tail -n +"$((RPCs_line + 1))" $CONF_FILE_PATH >> temp.yaml 
+            sudo mv temp.yaml $CONF_FILE_PATH
             sudo ./unchained.sh worker restart &> /dev/null
             sleep 3
             fi
@@ -656,10 +690,11 @@ do
                 #TO-DO the line number of rpcs is still hardcoded
                 if remove_bad_rpcs; then  
                 cecho "Possible bad rpc in conf. Adding merkle..." "yellow"
-                sudo head -n 8 conf/conf.worker.yaml > temp.yaml  
+                RPCs_line=$(get_RPCs_line_num)
+                sudo head -n $RPCs_line $CONF_FILE_PATH > temp.yaml  
                 echo "    - https://eth.merkle.io" >> temp.yaml 
-                sudo tail -n +9 conf/conf.worker.yaml >> temp.yaml 
-                sudo mv temp.yaml conf/conf.worker.yaml
+                sudo tail -n +"$((RPCs_line + 1))" $CONF_FILE_PATH >> temp.yaml 
+                sudo mv temp.yaml $CONF_FILE_PATH
                 sudo ./unchained.sh worker restart &> /dev/null
                 sleep 3
                 fi
@@ -686,11 +721,16 @@ done
 
 import_original_key
 
-unchained_address=$(sudo cat conf/secrets.worker.yaml | grep 'address:' | awk -F ': ' '{print $2}')
+## Updating public key after importing the original key
+PUBKEY="$(get_publickey)"
+
+unchained_address=$(get_address)
+
 #Getting the node score on the leadboard
 current_score="$(get_points "$PUBKEY" )"
 echo -n "Your node name is "
 cecho "${node_name}." "green"
+
 echo -n "Your address is "
 cecho "${unchained_address}." "green"
 if [ "$current_score" == "null" ] || [[ $(($current_score)) < 100 ]]
