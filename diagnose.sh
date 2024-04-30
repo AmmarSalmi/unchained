@@ -46,9 +46,13 @@ cecho() {
 import_original_key() {
     ## Importing og secret key
     cecho "importing original secret key" "green"
-    if [ -f secrets.backup ] 
+    if [ -f $backup_file_name ] 
     then
-        original_key=$(sudo awk -F': ' ' /secret/ {print $2}' secrets.backup) 
+        if [[ -z $chosen_key ]]; then
+            original_key=$(sudo awk -F': ' ' /secret/ {print $2}' $backup_file_name) 
+        else 
+            original_key=$chosen_key
+        fi
         current_key=$(sudo awk -F': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) 
         if [[ $current_key == $original_key ]]; then
             cecho "Your node is already using the original key" "green"
@@ -63,7 +67,7 @@ import_original_key() {
         if [[ $current_key == $original_key ]]; then
             cecho "Original key imported and node restarted successfully" "green"
         else
-            cecho "Couldn't import orginal key. Please do it manually. It's stored in file secrets.backup." "yellow"
+            cecho "Couldn't import orginal key. Please do it manually. It's stored in file $backup_file_name." "yellow"
         fi
         fi
     else
@@ -116,11 +120,16 @@ function check_container_state()
             ;;
     esac
 }
+## Recover secretkey from file using simple awk parsing command
+get_secret_key() {
+    local path=${1:-$SECRETS_FILE_PATH}
+    [[ -f $path ]] && sudo awk -F': ' ' /secret/ {print $2}' $path
+}
 ## Grab secret key from secrets file and obscure most of it
 show_secretkey() {
-    [ -f $SECRETS_FILE_PATH ] && secretkey=$(sudo awk -F ': ' ' /secret/ {print $2}' $SECRETS_FILE_PATH) || echo "Can't find secrets.worker.yaml"
-    first4chars=${secretkey: 0:4}
-    last4chars=${secretkey: -4}
+    local secretkey=$(get_secret_key) || echo "Can't find secrets.worker.yaml"
+    local first4chars=${secretkey: 0:4}
+    local last4chars=${secretkey: -4}
     echo "$first4chars**********$last4chars"
 }
 
@@ -391,13 +400,98 @@ is_broker_down() {
     done
     [ "$tested_nodes" -eq "${#public_keys[@]}" ]
 }
-##################################
-## THE END OF FUNCTION DECLARATIONS#
-##################################
+## Table graphics
+print_keys_table_header() {
+    printf "########################################################################\n"
+    printf "# N #     Secret Key     #    Score  #          Observation            #\n"
+    printf "########################################################################\n"
+}
+
+print_keys_table_footer() {
+    printf "########################################################################\n"
+}
+## Scan the machine for possible backup of private keys
+fetch_secretkeys() {
+    ## Finding all files containing a secretkey
+    files_with_keys=$(sudo grep -lirE "secretkey: [0-9abcdef]{64}" $HOME)
+
+    ## Declaring local variables
+    local keysArray=()
+    local scoresArray=()
+    local triedKeys="*******"
+    local pubKey=""
+    local secretKey=""
+    local score=0
+    local key_index=0
+    local max_score=0
+    local max_index current_secret_key
+
+    ## Checking all files for keys
+    while IFS= read filepath
+    do
+    ## TODO Covering the case where public key is base58 not a hex
+    pubKey=$(awk -F ': ' ' /public/ {print $2} ' $filepath )
+    secretKey=$(get_secret_key $filepath ) 
+    [[ "$folder" == "${filepath%/$SECRETS_FILE_PATH}" ]] && current_secret_key=$secretKey
+    case "$triedKeys" in
+        ## Checking if the public key is redundant
+        *"$pubKey"*) 
+            continue;
+            ;;
+        *)
+            ## Adding the key and score to their respective tables
+            [[ -z $pubKey ]] && continue
+            score=$(get_points $pubKey);
+            [[ $score -gt $max_score ]] && max_index=$key_index && max_score=$score
+            triedKeys=${pubKey}${triedKeys}
+            keysArray[$key_index]=$secretKey && scoresArray[$key_index]=$score && ((key_index++))
+            ;;
+    esac
+    done <<< $files_with_keys
+    local num_of_keys=${#keysArray[@]}
+    [[ $num_of_keys == 1 ]] && return 1
+    cecho "Multiple keys detected on your machine..."
+    print_keys_table_header
+    for ((i=0; i < $num_of_keys; i++))
+    do
+        local obs=""
+        [[ $max_index == $i ]] && obs=${obs:+$obs" and"}" Max points" 
+        [[ $current_secret_key == ${keysArray[$i]} ]] && obs=${obs:+$obs" and"}" Current key" 
+        printf "#%2d # %s******** # %9d # %-31s #\n" "$((i+1))" "${keysArray[$i]:0:10}" "${scoresArray[$i]}" "$obs"
+    done
+    print_keys_table_footer
+    ## Respecting grammar :D
+    (( num_of_keys > 1 )) && str1="s" && str2="were"
+    printf "%d key%s %s found on your machine.\n" "$num_of_keys" "${str1-""}" "${str2-"was"}"  
+    printf "Which key do you want to import? (1-%d) or just ENTER to keep the current key : " "$num_of_keys"    
+    while :
+    do
+        read -r key_choice 
+        case $key_choice in
+            [1-$num_of_keys]|"")
+                if [[ -z $key_choice ]]; then
+                    chosen_key=$current_secret_key
+                else
+                    index=$(($key_choice - 1))
+                    chosen_key=${keysArray[$index]}
+                fi
+                printf "Importing key: %s*********\n" "${chosen_key:0:10}"
+                break
+                ;;
+            *) 
+                printf "Invalid input. Please choose a number between 1 and %d or just press ENTER to keep the current key: " "$num_of_keys" 
+                ;;
+        esac
+    done
+}
+######################################
+## THE END OF FUNCTION DECLARATIONS ##
+######################################
 
 ## Detect linux dist and set the appropriate package manager
 ## Some commands like wget, jq may not be installed by default on some machines
 ## They are needed for this script to run properly
+
 INSTALL_COMMAND="install"
 if command -v apt &>/dev/null; then
     PKG_MNGR="apt"
@@ -509,21 +603,27 @@ else
     exit 1
 fi
 
+## Facilitating keys recovery
+fetch_secretkeys
+
 cecho "Making sure the compose file is not using old image links (kenshitech)..." "yellow"
-sudo sed -iBACKUP 's/kenshitech/timeleaplabs/g' compose.yaml 
+sudo sed -i.bak 's/kenshitech/timeleaplabs/g' compose.yaml 
 
 ## Backing up secret key
 cecho "Backing up secret key" "yellow"
 if [[ -f "$SECRETS_FILE_PATH" ]] 
 then
-    sudo cp $SECRETS_FILE_PATH  secrets.backup
-    if [[ -f secrets.backup ]] &&  grep -q secret secrets.backup ; then
-        address=$(get_address secrets.backup)
+    ## Make sure not have redundant backups
+    key=$(get_secret_key)
+    backup_file_name=secrets.bak.${key:0:3}${key: -3}
+    [[ -f $backup_file_name ]] || sudo cp $SECRETS_FILE_PATH  $backup_file_name
+    if [[ -f "$backup_file_name" ]] &&  grep -q secret $backup_file_name ; then
+        address=$(get_address $backup_file_name)
         
         ## Puttin the apropriate labels in secrets to avoid creating new key pair
         sudo sed -i 's/k/K/g' $SECRETS_FILE_PATH
 
-        cecho "Secret key backed up successfully for the address: $address." "green"
+        cecho "Secret key backed up successfully in $backup_file_name for the address: $address." "green"
     else
         cecho "Secret key couldn't be backed up. Please do it manually before updating or using this script again."
         exit 1
@@ -540,6 +640,9 @@ else
         esac
     done
 fi
+
+## Importing the chosen key into the secrets file
+
 
 cecho "Checking if the node is running..." "yellow"
 start_node_escalation=1
@@ -689,13 +792,17 @@ done
 
 ## Current node public key constant
 PUBKEY=$(get_publickey)
-fix_node_escalation=1
+fix_node_escalation=0
 response=""
 while ! is_gaining_points 
 do
     case $fix_node_escalation in
-        1)
+        0)
             cecho "Your node is not gaining points." "red"
+            cecho "Restarting the node..." "yellow"
+            sudo docker restart $CONTAINER_NAME &> /dev/null
+            ;;
+        1)
             cecho "Checking rpc problem." "yellow"
             if sudo tail -n 10 "$(get_logs_path)" | grep ERR | grep -qi rpc 
             then
