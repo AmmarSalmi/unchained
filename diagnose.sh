@@ -449,7 +449,7 @@ fetch_secretkeys() {
     esac
     done <<< $files_with_keys
     local num_of_keys=${#keysArray[@]}
-    [[ $num_of_keys == 1 ]] && return 1
+    [[ $num_of_keys == 1 ]] && cecho "Only one key was found on your machine" "yellow" && return 1
     cecho "Multiple keys detected on your machine..."
     print_keys_table_header
     for ((i=0; i < $num_of_keys; i++))
@@ -467,8 +467,10 @@ fetch_secretkeys() {
     while :
     do
         read -r key_choice 
+        ## Make sure chosen number is within range
+        (( key_choice > num_of_keys )) && key_choice=0
         case $key_choice in
-            [1-$num_of_keys]|"")
+            [1-9][0-9]|[1-9]|"")
                 if [[ -z $key_choice ]]; then
                     chosen_key=$current_secret_key
                 else
