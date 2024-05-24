@@ -28,13 +28,16 @@ echo "##########################################################################
 cecho() {
     case $2  in
     'green')
-        echo -e "\e[32m$1\e[0m"
+        tput setaf 10; echo "$1" && tput sgr0
+        #echo -e "\e[32m$1\e[0m"
         ;;
     'yellow')
-        echo -e "\e[33m$1\e[0m"
+        tput setaf 11; echo "$1" && tput sgr0
+        #echo -e "\e[33m$1\e[0m"
         ;;
     'red')
-        echo -e "\e[31m$1\e[0m"
+        tput setaf 9; echo "$1" && tput sgr0
+        #echo -e "\e[31m$1\e[0m"
         ;;
     *)
         echo "$1"
@@ -449,7 +452,7 @@ fetch_secretkeys() {
     esac
     done <<< $files_with_keys
     local num_of_keys=${#keysArray[@]}
-    [[ $num_of_keys == 1 ]] && cecho "Only one key was found on your machine" "yellow" && return 1
+    [[ $num_of_keys < 2 ]] && cecho "Only one key was found on your machine" "yellow" && return 1
     cecho "Multiple keys detected on your machine..."
     print_keys_table_header
     for ((i=0; i < $num_of_keys; i++))
