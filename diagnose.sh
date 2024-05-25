@@ -433,7 +433,6 @@ fetch_secretkeys() {
     while IFS= read filepath
     do
     ## TODO Covering the case where public key is base58 not a hex
-    echo $filepath
     pubKey=$(sudo awk -F ': ' ' /public/ {print $2} ' $filepath )
     secretKey=$(get_secret_key $filepath ) 
     [[ "$folder" == "${filepath%/$SECRETS_FILE_PATH}" ]] && current_secret_key=$secretKey
