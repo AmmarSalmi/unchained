@@ -417,7 +417,6 @@ print_keys_table_footer() {
 fetch_secretkeys() {
     ## Finding all files containing a secretkey
     files_with_keys=$(sudo grep -lirE "secretkey: [0-9abcdef]{64}" $HOME)
-
     ## Declaring local variables
     local keysArray=()
     local scoresArray=()
@@ -430,10 +429,12 @@ fetch_secretkeys() {
     local max_index current_secret_key
 
     ## Checking all files for keys
+    echo $files_with_keys
     while IFS= read filepath
     do
     ## TODO Covering the case where public key is base58 not a hex
-    pubKey=$(awk -F ': ' ' /public/ {print $2} ' $filepath )
+    echo $filepath
+    pubKey=$(sudo awk -F ': ' ' /public/ {print $2} ' $filepath )
     secretKey=$(get_secret_key $filepath ) 
     [[ "$folder" == "${filepath%/$SECRETS_FILE_PATH}" ]] && current_secret_key=$secretKey
     case "$triedKeys" in
@@ -452,6 +453,7 @@ fetch_secretkeys() {
     esac
     done <<< $files_with_keys
     local num_of_keys=${#keysArray[@]}
+    echo "We found $num_of_keys keys"
     [[ $num_of_keys < 2 ]] && cecho "Only one key was found on your machine" "yellow" && return 1
     cecho "Multiple keys detected on your machine..."
     print_keys_table_header
